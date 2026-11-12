@@ -1,0 +1,22 @@
+<Solution>
+  <Folder Name="/src/" />
+  <Folder Name="/src/API/">
+    <Project Path="HR.LeaveManagement.Api/HR.LeaveManagement.Api.csproj" />
+  </Folder>
+  <Folder Name="/src/Core/">
+    <Project Path="HR.LeaveManagement.Application/HR.LeaveManagement.Application.csproj" />
+    <Project Path="HR.LeaveManagement.Domain/HR.LeaveManagement.Domain.csproj" />
+  </Folder>
+  <Folder Name="/src/Infrastructure/">
+    <Project Path="HR.LeaveManagement.Identity/HR.LeaveManagement.Identity.csproj" />
+    <Project Path="HR.LeaveManagement.Infrastructure/HR.LeaveManagement.Infrastructure.csproj" />
+    <Project Path="HR.LeaveManagement.Persistence/HR.LeaveManagement.Persistence.csproj" />
+  </Folder>
+  <Folder Name="/src/UI/">
+    <Project Path="HR.LeaveManagement.BlazorUI/HR.LeaveManagement.BlazorUI.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="HR.LeaveManagement.Application.UnitTests/HR.LeaveManagement.Application.UnitTests.csproj" />
+    <Project Path="HR.LeaveManagement.Persistence.IntegrationTests/HR.LeaveManagement.Persistence.IntegrationTests.csproj" />
+  </Folder>
+</Solution>

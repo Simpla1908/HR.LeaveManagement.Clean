@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\HR.LeaveManagement.Domain\HR.LeaveManagement.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Contracts\Email\" />
+    <Folder Include="Contracts\Identity\" />
+    <Folder Include="Contracts\Logging\" />
+    <Folder Include="Exceptions\" />
+    <Folder Include="Features\LeaveAllocation\" />
+    <Folder Include="Features\LeaveRequest\" />
+    <Folder Include="Features\LeaveType\" />
+    <Folder Include="MappingProfiles\" />
+    <Folder Include="Models\Email\" />
+    <Folder Include="Models\Identity\" />
+  </ItemGroup>
+
+</Project>

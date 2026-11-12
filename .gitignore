@@ -1,0 +1,13 @@
+# Visual Studio: local caches and user settings
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# .NET build outputs
+**/[Bb]in/
+**/[Oo]bj/
+
+# Generated test results
+**/[Tt]est[Rr]esults/
