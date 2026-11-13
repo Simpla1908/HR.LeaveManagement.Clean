@@ -1,4 +1,6 @@
 using HR.LeaveManagement.BlazorUI.Components;
+using HR.LeaveManagement.BlazorUI.Services;
+using Microsoft.AspNetCore.Components.Authorization;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,6 +14,9 @@ builder.Services.AddHttpClient("LeaveApi", client =>
     client.Timeout = TimeSpan.FromSeconds(20);
 });
 builder.Services.AddScoped<HR.LeaveManagement.BlazorUI.Services.LeaveApiClient>();
+builder.Services.AddAuthorizationCore();
+builder.Services.AddCascadingAuthenticationState();
+builder.Services.AddScoped<AuthenticationStateProvider, ApiAuthenticationStateProvider>();
 
 var app = builder.Build();
 

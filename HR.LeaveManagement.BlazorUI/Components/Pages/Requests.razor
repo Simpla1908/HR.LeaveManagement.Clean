@@ -1,0 +1,64 @@
+@page "/demandes"
+@attribute [Authorize]
+@inherits ApiPageBase
+<PageTitle>Demandes de congé · Congé</PageTitle>
+<PageHeader Eyebrow="CONGÉS / DEMANDES" Title="Le temps de faire une pause." Description="Préparez vos absences et suivez chaque décision au même endroit.">
+    <button class="button primary" disabled="@IsBusy" @onclick="NewRequest"><AppIcon Name="plus" />Nouvelle demande</button>
+</PageHeader>
+<Feedback Error="@Error" Success="@Success" Busy="@IsBusy" />
+@if (form is not null)
+{
+<section class="panel request-editor" @key="form"><div class="panel-heading"><div><span class="section-label">VOTRE PROCHAINE PAUSE</span><h2>@(form.Id == 0 ? "Préparer une demande" : "Modifier la demande")</h2></div><button class="icon-button" aria-label="Fermer le formulaire" disabled="@IsBusy" @onclick="Close"><AppIcon Name="close" /></button></div>
+<EditForm Model="form" OnValidSubmit="Save" FormName="request-editor"><DataAnnotationsValidator /><ValidationSummary /><fieldset disabled="@IsBusy">
+<div class="form-grid three"><div class="field"><label for="request-type">Type de congé</label><InputSelect id="request-type" class="form-select" @bind-Value="form.LeaveTypeId"><option value="0">Sélectionner un type</option>@foreach (var type in types) { <option value="@type.Id">@type.Name</option> }</InputSelect><ValidationMessage For="() => form.LeaveTypeId" /></div><div class="field"><label for="request-start">Date de début</label><InputDate id="request-start" class="form-control" @bind-Value="form.StartDate" /><ValidationMessage For="() => form.StartDate" /></div><div class="field"><label for="request-end">Date de fin</label><InputDate id="request-end" class="form-control" @bind-Value="form.EndDate" /><ValidationMessage For="() => form.EndDate" /></div></div>
+<div class="field"><label for="request-comment">Commentaire <span class="optional">facultatif</span></label><InputTextArea id="request-comment" class="form-control" rows="2" maxlength="1000" placeholder="Une précision à partager avec votre responsable ?" @bind-Value="form.RequestComments" /><ValidationMessage For="() => form.RequestComments" /></div>
+<div class="form-actions"><button class="button primary" type="submit"><AppIcon Name="check" />Enregistrer la demande</button><button class="button secondary" type="button" @onclick="Close">Annuler</button><span class="form-hint">Jours calendaires, dates incluses. Une seule année par demande.</span></div>
+</fieldset></EditForm></section>
+}
+<section class="panel"><div class="panel-heading"><div><h2>@(Api.User?.IsAdministrator == true ? "Les demandes de l'équipe" : "Mes demandes") <span class="count">@requests.Count</span></h2><p>Les demandes en attente peuvent encore être modifiées.</p></div><button class="button subtle" disabled="@IsBusy" @onclick="Refresh">Actualiser</button></div>
+<div class="table-toolbar"><div class="search-field"><AppIcon Name="search" /><input type="search" aria-label="Rechercher une demande" placeholder="Rechercher un type ou un collaborateur…" @bind="search" @bind:event="oninput" /></div><select class="form-select filter-select" aria-label="Filtrer par statut" @bind="status"><option value="">Tous les statuts</option>@foreach (var value in new[] { "En attente", "Approuvée", "Refusée", "Annulée" }) { <option>@value</option> }</select></div>
+@if (!IsBusy && Filtered.Count == 0) { <EmptyState Icon="requests" Title="Aucune demande à afficher" Description="Préparez votre première demande ou ajustez les filtres." /> }
+else
+{
+<div class="table-wrap"><table><thead><tr>@if (Api.User?.IsAdministrator == true) { <th>Collaborateur</th> }<th>Type de congé</th><th>Période</th><th>Statut</th><th class="text-right">Actions</th></tr></thead><tbody>
+@foreach (var item in Filtered)
+{
+<tr @key="item.Id">@if (Api.User?.IsAdministrator == true) { <td>@(item.Employee?.Email ?? item.RequestingEmployeeId)</td> }<td><strong>@item.LeaveType.Name</strong></td><td>@item.StartDate.ToString("dd/MM/yyyy")<small class="cell-subline">au @item.EndDate.ToString("dd/MM/yyyy")</small></td><td><span class="badge @item.StatusClass">@item.Status</span></td><td><div class="row-actions wrap">
+@if (!item.Cancelled)
+{
+    @if (!item.Approved.HasValue) { <button class="icon-button" aria-label="Modifier la demande" title="Modifier" disabled="@IsBusy" @onclick="() => Edit(item)"><AppIcon Name="edit" /></button> }
+    @if (Api.User?.IsAdministrator == true)
+    {
+        @if (item.Approved != true) { <button class="button mini positive-button" disabled="@IsBusy" @onclick="() => Approve(item.Id, true)">Approuver</button> }
+        @if (item.Approved != false) { <button class="button mini secondary" disabled="@IsBusy" @onclick="() => Approve(item.Id, false)">Refuser</button> }
+    }
+    <button class="button mini subtle" disabled="@IsBusy" @onclick="() => AskCancel(item)">Annuler</button>
+}
+@if (Api.User?.IsAdministrator == true) { <button class="icon-button destructive" aria-label="Supprimer la demande" title="Annulez une demande approuvée avant de la supprimer" disabled="@(IsBusy || (item.Approved == true && !item.Cancelled))" @onclick="() => AskDelete(item)"><AppIcon Name="trash" /></button> }
+</div></td></tr>
+}
+</tbody></table></div>
+}
+<div class="table-footer">@Filtered.Count demande(s) affichée(s)<span>Votre solde est mis à jour après approbation.</span></div></section>
+@if (target is not null) { <ConfirmDialog Title="@(deleting ? "Supprimer la demande ?" : "Annuler cette demande ?")" Description="@(deleting ? "La demande sera définitivement supprimée." : "La demande sera annulée. Si elle a été approuvée, les jours déduits seront restitués.")" ConfirmText="@(deleting ? "Confirmer la suppression" : "Confirmer l'annulation")" Busy="@IsBusy" OnConfirm="Confirm" OnCancel="CancelConfirmation" /> }
+@code {
+    private List<LeaveRequestModel> requests = [];
+    private List<LeaveTypeModel> types = [];
+    private RequestFormModel? form;
+    private LeaveRequestModel? target;
+    private string search = "", status = "";
+    private bool deleting;
+    private List<LeaveRequestModel> Filtered => requests.Where(x => (status.Length == 0 || x.Status == status)
+        && $"{x.LeaveType.Name} {x.Employee?.Email}".Contains(search, StringComparison.OrdinalIgnoreCase)).OrderByDescending(x => x.Id).ToList();
+    protected override async Task LoadAsync() { requests = await Api.GetRequestsAsync(); types = await Api.GetTypesAsync(); }
+    private Task Refresh() => RunAsync(LoadAsync);
+    private void NewRequest() => form = new();
+    private void Close() => form = null;
+    private void Edit(LeaveRequestModel item) => form = new() { Id = item.Id, LeaveTypeId = item.LeaveTypeId, StartDate = item.StartDate, EndDate = item.EndDate, RequestComments = item.RequestComments ?? "" };
+    private Task Save() => RunAsync(async () => { await Api.SaveRequestAsync(form!); form = null; await LoadAsync(); }, "Votre demande a été enregistrée.");
+    private Task Approve(int id, bool approved) => RunAsync(async () => { await Api.ApproveAsync(id, approved); await LoadAsync(); }, "La décision a été enregistrée.");
+    private void AskCancel(LeaveRequestModel item) { target = item; deleting = false; }
+    private void AskDelete(LeaveRequestModel item) { target = item; deleting = true; }
+    private void CancelConfirmation() => target = null;
+    private Task Confirm() => RunAsync(async () => { var id = target!.Id; target = null; if (deleting) await Api.DeleteRequestAsync(id); else await Api.CancelAsync(id); if (form?.Id == id) form = null; await LoadAsync(); }, "La demande a été mise à jour.");
+}

@@ -1,187 +1,33 @@
 @page "/"
-@using HR.LeaveManagement.BlazorUI.Models
-@using HR.LeaveManagement.BlazorUI.Services
-@inject LeaveApiClient Api
-@inject IWebHostEnvironment Environment
-
-<PageTitle>Gestion des cong?s</PageTitle>
-<h1>Gestion des cong?s</h1>
-<p>Consultez vos quotas et suivez vos demandes de cong?.</p>
-@if (!string.IsNullOrEmpty(error))
-{
-    <div class="alert alert-danger" role="alert">@error</div>
-}
-@if (!string.IsNullOrEmpty(success))
-{
-    <div class="alert alert-success" role="status">@success</div>
-}
-@if (!Api.IsSignedIn)
-{
-    <section class="leave-panel">
-        <h2>Connexion</h2>
-        <EditForm Model="login" OnValidSubmit="Login" FormName="login">
-            <DataAnnotationsValidator /><ValidationSummary />
-            <fieldset disabled="@busy">
-                <label for="login-email">Adresse e-mail</label>
-                <InputText id="login-email" type="email" class="form-control" autocomplete="username" @bind-Value="login.Email" />
-                <label for="login-password">Mot de passe</label>
-                <InputText id="login-password" type="password" class="form-control" autocomplete="current-password" @bind-Value="login.Password" />
-                <button class="btn btn-primary mt-3" type="submit">Se connecter</button>
-            </fieldset>
-        </EditForm>
+@attribute [Authorize]
+@inherits ApiPageBase
+<PageTitle>Vue d'ensemble · Congé</PageTitle>
+<PageHeader Eyebrow="VOTRE TABLEAU DE BORD" Title="@($"Bonjour, {Api.User?.UserName}.")" Description="Votre équipe et vos congés, en un coup d'œil.">
+    <a class="button primary" href="/demandes"><AppIcon Name="plus" />Nouvelle demande</a>
+</PageHeader>
+<Feedback Error="@Error" Success="@Success" Busy="@IsBusy" />
+<section class="welcome-banner"><div><span class="section-label">L'ÉQUILIBRE, ÇA S'ORGANISE</span><h2>Moins d'administratif.<br />Plus de tranquillité.</h2><p>Retrouvez vos demandes et les jours disponibles dans un seul espace.</p><a href="/allocations" class="text-link">Consulter les allocations <AppIcon Name="arrow" /></a></div><div class="banner-graphic" aria-hidden="true"><div class="graphic-ring"></div><span class="graphic-calendar"><AppIcon Name="calendar" /></span><span class="graphic-check">✓</span><span class="graphic-pill">Tout commence par un peu de temps.</span></div></section>
+<div class="stats-grid">
+    <div class="stat-card"><span class="stat-icon teal"><AppIcon Name="layers" /></span><span class="stat-label">Jours disponibles · @DateTime.Today.Year</span><strong>@allocations.Where(x => x.Period == DateTime.Today.Year).Sum(x => x.NumberOfDays)</strong><small>@(Api.User?.IsAdministrator == true ? "Total des soldes de l'équipe" : "Votre solde tous types confondus")</small></div>
+    <div class="stat-card"><span class="stat-icon amber"><AppIcon Name="clock" /></span><span class="stat-label">Demandes en attente</span><strong>@requests.Count(x => !x.Cancelled && !x.Approved.HasValue)</strong><small>@(Api.User?.IsAdministrator == true ? "À examiner par l'administration" : "En cours d'examen")</small></div>
+    <div class="stat-card"><span class="stat-icon blue"><AppIcon Name="check" /></span><span class="stat-label">Demandes approuvées</span><strong>@requests.Count(x => !x.Cancelled && x.Approved == true)</strong><small>Demandes actives, toutes années</small></div>
+    <div class="stat-card"><span class="stat-icon violet"><AppIcon Name="calendar" /></span><span class="stat-label">Types de congé</span><strong>@types.Count</strong><small>Des catégories adaptées à votre équipe</small></div>
+</div>
+<div class="dashboard-grid">
+    <section class="panel"><div class="panel-heading"><div><h2>Les dernières demandes</h2><p>Suivez les décisions et les prochaines absences.</p></div><a class="text-link" href="/demandes">Tout voir <AppIcon Name="arrow" /></a></div>
+        @if (!IsBusy && requests.Count == 0) { <EmptyState Icon="calendar" Title="Tout est calme pour le moment" Description="Vos demandes apparaîtront ici après leur création." /> }
+        else { <div class="table-wrap"><table><thead><tr><th>Type de congé</th><th>Période</th><th>Statut</th></tr></thead><tbody>@foreach (var item in requests.OrderByDescending(x => x.Id).Take(5)) { <tr><td><strong>@item.LeaveType.Name</strong></td><td>@item.StartDate.ToString("dd MMM") – @item.EndDate.ToString("dd MMM yyyy")</td><td><span class="badge @item.StatusClass">@item.Status</span></td></tr> }</tbody></table></div> }
     </section>
-    @if (Environment.IsDevelopment())
-    {
-        <section class="leave-panel">
-            <h2>Cr?er un compte employ?</h2>
-            <EditForm Model="registration" OnValidSubmit="Register" FormName="register">
-                <DataAnnotationsValidator /><ValidationSummary />
-                <fieldset disabled="@busy">
-                    <label for="first-name">Pr?nom</label><InputText id="first-name" class="form-control" @bind-Value="registration.FirstName" />
-                    <label for="last-name">Nom</label><InputText id="last-name" class="form-control" @bind-Value="registration.LastName" />
-                    <label for="user-name">Identifiant (6 caract?res minimum)</label><InputText id="user-name" class="form-control" autocomplete="username" @bind-Value="registration.UserName" />
-                    <label for="register-email">Adresse e-mail</label><InputText id="register-email" type="email" class="form-control" @bind-Value="registration.Email" />
-                    <label for="register-password">Mot de passe</label><InputText id="register-password" type="password" class="form-control" autocomplete="new-password" @bind-Value="registration.Password" />
-                    <p class="form-text">Au moins 8 caract?res, une majuscule, une minuscule, un chiffre et un symbole.</p>
-                    <button type="submit" class="btn btn-secondary mt-2">Cr?er le compte</button>
-                </fieldset>
-            </EditForm>
-        </section>
-    }
-}
-else
-{
-    <div class="leave-toolbar">
-        <p>Connect? : <strong>@Api.User!.UserName</strong> ? @(Api.User.IsAdministrator ? "Administrateur" : "Employ?")</p>
-        <button class="btn btn-outline-secondary" disabled="@busy" @onclick="Refresh">Actualiser</button>
-        <button class="btn btn-outline-secondary" disabled="@busy" @onclick="Logout">D?connexion</button>
-    </div>
-    <section class="leave-panel">
-        <h2>@(Api.User.IsAdministrator ? "Quotas des employ?s" : "Mes quotas")</h2>
-        @if (allocations.Count == 0) { <p>Aucun quota attribu?. Contactez votre administrateur.</p> }
-        else
-        {
-            <div class="table-responsive"><table class="table">
-                <thead><tr>@if (Api.User.IsAdministrator) { <th>Employ?</th> }<th>Type</th><th>Ann?e</th><th>Jours disponibles</th></tr></thead>
-                <tbody>@foreach (var item in allocations) { <tr>@if (Api.User.IsAdministrator) { <td>@item.EmployeeId</td> }<td>@item.LeaveType.Name</td><td>@item.Period</td><td>@item.NumberOfDays</td></tr> }</tbody>
-            </table></div>
-        }
-    </section>
-    <section class="leave-panel">
-        <h2>@(requestForm.Id == 0 ? "Nouvelle demande" : "Modifier la demande")</h2>
-        <p>Jours calendaires, dates incluses. Une demande doit rester dans la m?me ann?e.</p>
-        <EditForm Model="requestForm" OnValidSubmit="SaveRequest" FormName="request">
-            <DataAnnotationsValidator /><ValidationSummary />
-            <fieldset disabled="@busy">
-                <label for="leave-type">Type de cong?</label>
-                <InputSelect id="leave-type" class="form-select" @bind-Value="requestForm.LeaveTypeId">
-                    <option value="0">S?lectionner un type</option>
-                    @foreach (var type in types) { <option value="@type.Id">@type.Name</option> }
-                </InputSelect>
-                <div class="leave-dates">
-                    <div><label for="start-date">Date de d?but</label><InputDate id="start-date" class="form-control" @bind-Value="requestForm.StartDate" /></div>
-                    <div><label for="end-date">Date de fin</label><InputDate id="end-date" class="form-control" @bind-Value="requestForm.EndDate" /></div>
-                </div>
-                <label for="request-comments">Commentaire</label><InputTextArea id="request-comments" class="form-control" @bind-Value="requestForm.RequestComments" />
-                <button class="btn btn-primary mt-3" type="submit">Enregistrer</button>
-                @if (requestForm.Id != 0) { <button type="button" class="btn btn-outline-secondary mt-3" @onclick="ResetRequest">Fermer la modification</button> }
-            </fieldset>
-        </EditForm>
-    </section>
-    <section class="leave-panel">
-        <h2>@(Api.User.IsAdministrator ? "Demandes des employ?s" : "Mes demandes")</h2>
-        @if (requests.Count == 0) { <p>Aucune demande.</p> }
-        else
-        {
-            <div class="table-responsive"><table class="table align-middle">
-                <thead><tr>@if (Api.User.IsAdministrator) { <th>Employ?</th> }<th>Type</th><th>P?riode</th><th>Statut</th><th>Actions</th></tr></thead>
-                <tbody>
-                @foreach (var item in requests)
-                {
-                    <tr>
-                        @if (Api.User.IsAdministrator) { <td>@(item.Employee?.Email ?? item.RequestingEmployeeId)</td> }
-                        <td>@item.LeaveType.Name</td><td>@item.StartDate.ToString("dd/MM/yyyy") ? @item.EndDate.ToString("dd/MM/yyyy")</td><td>@item.Status</td>
-                        <td class="leave-actions">
-                            @if (!item.Cancelled)
-                            {
-                                @if (!item.Approved.HasValue) { <button class="btn btn-sm btn-outline-primary" disabled="@busy" @onclick="() => Edit(item.Id)">Modifier</button> }
-                                <button class="btn btn-sm btn-outline-danger" disabled="@busy" @onclick="() => Cancel(item.Id)">Annuler</button>
-                                @if (Api.User.IsAdministrator)
-                                {
-                                    @if (item.Approved != true) { <button class="btn btn-sm btn-success" disabled="@busy" @onclick="() => Approve(item.Id, true)">Approuver</button> }
-                                    @if (item.Approved != false) { <button class="btn btn-sm btn-outline-secondary" disabled="@busy" @onclick="() => Approve(item.Id, false)">Refuser</button> }
-                                }
-                            }
-                        </td>
-                    </tr>
-                }
-                </tbody>
-            </table></div>
-        }
-    </section>
-    @if (Api.User.IsAdministrator)
-    {
-        <section class="leave-panel">
-            <h2>Types de cong?s et allocations annuelles</h2>
-            <EditForm Model="newType" OnValidSubmit="CreateType" FormName="type">
-                <DataAnnotationsValidator /><ValidationSummary />
-                <fieldset disabled="@busy">
-                    <label for="type-name">Nom du type</label><InputText id="type-name" class="form-control" @bind-Value="newType.Name" />
-                    <label for="default-days">Quota annuel par d?faut</label><InputNumber id="default-days" class="form-control" @bind-Value="newType.DefaultDays" />
-                    <button class="btn btn-primary mt-3" type="submit">Cr?er le type</button>
-                </fieldset>
-            </EditForm>
-            <ul class="leave-types">
-                @foreach (var type in types)
-                {
-                    <li><span>@type.Name ? @type.DefaultDays jours</span><button class="btn btn-sm btn-outline-primary" disabled="@busy" @onclick="() => Allocate(type.Id)">Attribuer pour @DateTime.Today.Year</button></li>
-                }
-            </ul>
-        </section>
-    }
-}
-@if (busy) { <p role="status">Op?ration en cours?</p> }
-
+    <section class="panel quick-links"><span class="section-label">POUR ALLER À L'ESSENTIEL</span><h2>Vos raccourcis</h2><a href="/demandes"><span class="quick-icon"><AppIcon Name="requests" /></span><span><strong>Demandes de congé</strong><small>Créer, suivre et organiser</small></span><AppIcon Name="arrow" /></a><a href="/allocations"><span class="quick-icon"><AppIcon Name="layers" /></span><span><strong>Allocations</strong><small>Consulter les soldes disponibles</small></span><AppIcon Name="arrow" /></a>@if (Api.User?.IsAdministrator == true) { <a href="/utilisateurs"><span class="quick-icon"><AppIcon Name="users" /></span><span><strong>Votre équipe</strong><small>Gérer les comptes et les rôles</small></span><AppIcon Name="arrow" /></a> }<div class="tip"><strong>Un repère utile</strong><p>Les jours sont déduits à l'approbation et restitués à l'annulation.</p></div></section>
+</div>
 @code {
-    private LoginModel login = new();
-    private RegistrationModel registration = new();
-    private RequestFormModel requestForm = new();
-    private LeaveTypeModel newType = new();
-    private List<LeaveTypeModel> types = [];
     private List<AllocationModel> allocations = [];
     private List<LeaveRequestModel> requests = [];
-    private string? error, success;
-    private bool busy;
-
-    private async Task Run(Func<Task> action, string? message = null)
+    private List<LeaveTypeModel> types = [];
+    protected override async Task LoadAsync()
     {
-        if (busy) return;
-        busy = true; error = null; success = null;
-        try { await action(); success = message; }
-        catch (HttpRequestException) { error = "L?API est inaccessible. R?essayez dans un instant."; }
-        catch (TaskCanceledException) { error = "Le serveur met trop de temps ? r?pondre. R?essayez."; }
-        catch (InvalidOperationException ex) { error = ex.Message; }
-        finally { busy = false; }
-    }
-    private async Task Load()
-    {
-        types = await Api.GetTypesAsync();
         allocations = await Api.GetAllocationsAsync();
         requests = await Api.GetRequestsAsync();
+        types = await Api.GetTypesAsync();
     }
-    private Task Login() => Run(async () => { await Api.LoginAsync(login); login = new(); await Load(); });
-    private Task Register() => Run(async () => { await Api.RegisterAsync(registration); registration = new(); }, "Compte cr??. Vous pouvez vous connecter.");
-    private Task Refresh() => Run(Load);
-    private void Logout() { Api.Logout(); types.Clear(); allocations.Clear(); requests.Clear(); ResetRequest(); error = success = null; }
-    private void ResetRequest() => requestForm = new();
-    private Task SaveRequest() => Run(async () => { await Api.SaveRequestAsync(requestForm); ResetRequest(); await Load(); }, "Demande enregistr?e.");
-    private Task Cancel(int id) => Run(async () => { await Api.CancelAsync(id); await Load(); }, "Demande annul?e.");
-    private Task Approve(int id, bool approved) => Run(async () => { await Api.ApproveAsync(id, approved); await Load(); }, "D?cision enregistr?e.");
-    private Task Edit(int id) => Run(async () =>
-    {
-        var item = await Api.GetRequestAsync(id);
-        requestForm = new() { Id = item.Id, LeaveTypeId = item.LeaveTypeId, StartDate = item.StartDate, EndDate = item.EndDate, RequestComments = item.RequestComments };
-    });
-    private Task CreateType() => Run(async () => { await Api.CreateTypeAsync(newType); newType = new(); await Load(); }, "Type de cong? cr??.");
-    private Task Allocate(int id) => Run(async () => { await Api.AllocateAsync(id); await Load(); }, "Quotas annuels attribu?s aux employ?s qui n?en disposaient pas encore.");
 }

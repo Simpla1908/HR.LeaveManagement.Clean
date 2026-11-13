@@ -1,0 +1,64 @@
+@page "/utilisateurs"
+@attribute [Authorize(Roles = "Administrator")]
+@inherits ApiPageBase
+<PageTitle>Utilisateurs · Congé</PageTitle>
+<PageHeader Eyebrow="ADMINISTRATION / ÉQUIPE" Title="Une place pour chacun." Description="Gérez les comptes et donnez à chacun les bons accès.">
+    <button class="button primary" disabled="@IsBusy" @onclick="NewUser"><AppIcon Name="plus" />Ajouter un utilisateur</button>
+</PageHeader>
+<Feedback Error="@Error" Success="@Success" Busy="@IsBusy" />
+<div class="metrics-row"><div><span class="metric-dot teal"></span><strong>@users.Count</strong> utilisateurs</div><div><span class="metric-dot violet"></span><strong>@users.Count(x => x.Role == "Administrator")</strong> administrateurs</div><div><span class="metric-dot amber"></span><strong>@users.Count(x => x.Role == "Employee")</strong> employés</div></div>
+<div class="management-grid @(form is not null ? "with-editor" : "")">
+<section class="panel">
+    <div class="panel-heading"><div><h2>Les membres de votre équipe <span class="count">@Filtered.Count</span></h2><p>Des profils à jour, une organisation plus simple.</p></div><button class="button subtle" disabled="@IsBusy" @onclick="Refresh">Actualiser</button></div>
+    <div class="table-toolbar"><div class="search-field"><AppIcon Name="search" /><input aria-label="Rechercher un utilisateur" type="search" placeholder="Rechercher un nom, un e-mail…" @bind="search" @bind:event="oninput" /></div><select class="form-select filter-select" aria-label="Filtrer par rôle" @bind="roleFilter"><option value="">Tous les rôles</option><option value="Administrator">Administrateurs</option><option value="Employee">Employés</option></select></div>
+    @if (!IsBusy && Filtered.Count == 0) { <EmptyState Icon="users" Title="Aucun utilisateur à afficher" Description="Ajoutez un compte ou ajustez votre recherche." /> }
+    else
+    {
+        <div class="table-wrap"><table><thead><tr><th>Utilisateur</th><th>Identifiant</th><th>Rôle</th><th class="text-right">Actions</th></tr></thead><tbody>
+        @foreach (var item in Filtered)
+        {
+            <tr @key="item.Id"><td><div class="person"><span class="avatar soft">@item.Initials</span><span><strong>@item.FullName @if (item.Id == Api.User?.UserId) { <span class="you-label">vous</span> }</strong><small>@item.Email</small></span></div></td><td>@item.UserName</td><td><span class="badge @(item.Role == "Administrator" ? "admin" : "neutral")">@item.RoleLabel</span></td><td><div class="row-actions"><button class="icon-button" title="Modifier" aria-label="@($"Modifier {item.FullName}")" disabled="@IsBusy" @onclick="() => Edit(item)"><AppIcon Name="edit" /></button><button class="icon-button destructive" title="Supprimer" aria-label="@($"Supprimer {item.FullName}")" disabled="@(IsBusy || item.Id == Api.User?.UserId)" @onclick="() => deleteTarget = item"><AppIcon Name="trash" /></button></div></td></tr>
+        }
+        </tbody></table></div>
+    }
+    <div class="table-footer">@Filtered.Count utilisateur(s) affiché(s)<span>Les accès administratifs sont réservés aux administrateurs.</span></div>
+</section>
+@if (form is not null)
+{
+    <aside class="panel editor-panel" @key="form"><div class="panel-heading"><div><span class="section-label">PROFIL UTILISATEUR</span><h2>@(form.Id.Length == 0 ? "Un nouveau membre" : "Modifier le profil")</h2></div><button class="icon-button" type="button" aria-label="Fermer le formulaire" disabled="@IsBusy" @onclick="Close"><AppIcon Name="close" /></button></div>
+    <EditForm Model="form" OnValidSubmit="Save" FormName="user-editor"><DataAnnotationsValidator /><ValidationSummary />
+        <fieldset disabled="@IsBusy"><div class="form-grid">
+            <div class="field"><label for="user-first">Prénom</label><InputText id="user-first" class="form-control" @bind-Value="form.FirstName" /><ValidationMessage For="() => form.FirstName" /></div>
+            <div class="field"><label for="user-last">Nom</label><InputText id="user-last" class="form-control" @bind-Value="form.LastName" /><ValidationMessage For="() => form.LastName" /></div>
+        </div><div class="field"><label for="user-name">Identifiant</label><InputText id="user-name" class="form-control" autocomplete="off" @bind-Value="form.UserName" /><ValidationMessage For="() => form.UserName" /><small>Au moins 6 caractères.</small></div>
+        <div class="field"><label for="user-email">Adresse e-mail</label><InputText id="user-email" type="email" class="form-control" @bind-Value="form.Email" /><ValidationMessage For="() => form.Email" /></div>
+        <div class="field"><label for="user-role">Rôle</label><InputSelect id="user-role" class="form-select" disabled="@(form.Id == Api.User?.UserId)" @bind-Value="form.Role"><option value="Employee">Employé</option><option value="Administrator">Administrateur</option></InputSelect><small>@(form.Id == Api.User?.UserId ? "Votre propre rôle administrateur est protégé." : "L'employé accède à ses congés. L'administrateur gère l'équipe.")</small></div>
+        @if (form.Id.Length == 0)
+        {
+            <div class="field"><label for="user-password">Mot de passe initial</label><InputText id="user-password" type="password" class="form-control" autocomplete="new-password" @bind-Value="form.Password" /><ValidationMessage For="() => form.Password" /><small>8 caractères, majuscule, minuscule, chiffre et symbole.</small></div>
+            <div class="field"><label for="user-confirm">Confirmer le mot de passe</label><InputText id="user-confirm" type="password" class="form-control" autocomplete="new-password" @bind-Value="form.ConfirmPassword" /><ValidationMessage For="() => form.ConfirmPassword" /></div>
+        }
+        <div class="form-actions"><button class="button primary" type="submit" disabled="@IsBusy"><AppIcon Name="check" />Enregistrer</button><button class="button secondary" type="button" @onclick="Close">Annuler</button></div></fieldset>
+    </EditForm></aside>
+}
+</div>
+@if (deleteTarget is not null)
+{
+    <ConfirmDialog Title="Supprimer ce compte ?" Description="@($"Le compte de {deleteTarget.FullName} sera définitivement supprimé. Un compte ayant encore des demandes ou des allocations ne peut pas être supprimé.")" Busy="@IsBusy" OnCancel="CancelDelete" OnConfirm="Delete" />
+}
+@code {
+    private List<UserModel> users = [];
+    private UserFormModel? form;
+    private UserModel? deleteTarget;
+    private string search = "", roleFilter = "";
+    private List<UserModel> Filtered => users.Where(x => (roleFilter.Length == 0 || x.Role == roleFilter)
+        && $"{x.FullName} {x.Email} {x.UserName}".Contains(search, StringComparison.OrdinalIgnoreCase)).ToList();
+    protected override async Task LoadAsync() => users = await Api.GetUsersAsync();
+    private Task Refresh() => RunAsync(LoadAsync);
+    private void NewUser() => form = new();
+    private void Close() => form = null;
+    private void CancelDelete() => deleteTarget = null;
+    private void Edit(UserModel item) => form = new() { Id = item.Id, FirstName = item.FirstName, LastName = item.LastName, UserName = item.UserName, Email = item.Email, Role = item.Role };
+    private Task Save() => RunAsync(async () => { await Api.SaveUserAsync(form!); form = null; await LoadAsync(); }, "Le profil utilisateur a été enregistré.");
+    private Task Delete() => RunAsync(async () => { var id = deleteTarget!.Id; deleteTarget = null; await Api.DeleteUserAsync(id); if (form?.Id == id) form = null; await LoadAsync(); }, "Le compte a été supprimé.");
+}

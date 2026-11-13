@@ -1,0 +1,6 @@
+<div class="empty-state"><span class="empty-icon"><AppIcon Name="@Icon" /></span><h3>@Title</h3><p>@Description</p></div>
+@code {
+    [Parameter] public string Title { get; set; } = "Aucun résultat";
+    [Parameter] public string Description { get; set; } = "Essayez un autre filtre.";
+    [Parameter] public string Icon { get; set; } = "search";
+}

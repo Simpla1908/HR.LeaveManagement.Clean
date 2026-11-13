@@ -123,6 +123,7 @@ public class AuthService : IAuthService
             new(JwtRegisteredClaimNames.Jti,
                 Guid.NewGuid().ToString()),
             new("uid", user.Id),
+            new("security_stamp", await _userManager.GetSecurityStampAsync(user)),
             new("name", user.UserName ?? string.Empty),
             new(JwtRegisteredClaimNames.Email,
                 user.Email ?? string.Empty)

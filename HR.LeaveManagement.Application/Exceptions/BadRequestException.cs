@@ -3,17 +3,17 @@ using FluentValidation.Results;
 
 namespace HR.LeaveManagement.Application.Exceptions;
 
+// Signale des données invalides ou une opération refusée par une règle métier.
 public class BadRequestException : Exception
 {
-    // Dictionnaire : nom de propriété → messages d'erreur.
-    public IDictionary<string, string[]> ValidationErrors
-    { get; }
+    // Pour chaque champ, conserver tous ses messages d'erreur.
+    public Dictionary<string, List<string>> ValidationErrors { get; }
+        = new Dictionary<string, List<string>>();
 
     // Constructeur pour une erreur métier générale.
     public BadRequestException(string message)
         : base(message)
     {
-        ValidationErrors = new Dictionary<string, string[]>();
     }
 
     // Constructeur pour les erreurs FluentValidation.
@@ -22,12 +22,15 @@ public class BadRequestException : Exception
         IEnumerable<ValidationFailure> errors)
         : base(message)
     {
-        ValidationErrors = errors
-            .GroupBy(error => error.PropertyName)
-            .ToDictionary(
-                group => group.Key,
-                group => group
-                    .Select(error => error.ErrorMessage)
-                    .ToArray());
+        foreach (var error in errors)
+        {
+            // Créer la liste lors de la première erreur de ce champ.
+            if (!ValidationErrors.ContainsKey(error.PropertyName))
+            {
+                ValidationErrors[error.PropertyName] = new List<string>();
+            }
+
+            ValidationErrors[error.PropertyName].Add(error.ErrorMessage);
+        }
     }
 }

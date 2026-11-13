@@ -3,6 +3,7 @@ using HR.LeaveManagement.Application.Contracts.Identity;
 using HR.LeaveManagement.Application.Contracts.Persistence;
 using HR.LeaveManagement.Application.Exceptions;
 using HR.LeaveManagement.Application.Features.LeaveRequest.Queries.GetLeaveRequestDetail;
+using HR.LeaveManagement.Application.Features.LeaveRequest.Shared;
 using HR.LeaveManagement.Application.Features.LeaveRequests.Requests.Queries;
 using HR.LeaveManagement.Domain;
 using MediatR;
@@ -26,7 +27,7 @@ namespace HR.LeaveManagement.Application.Features.LeaveRequests.Handlers.Queries
         {
             var entity = await _leaveRequestRepository.GetLeaveRequestWithDetails(request.Id)
                 ?? throw new NotFoundException(nameof(LeaveRequest), request.Id);
-            HR.LeaveManagement.Application.Services.LeaveRequestAccess.EnsureAllowed(_userService, entity);
+            LeaveRequestRules.EnsureAllowed(_userService, entity);
             var leaveRequest = _mapper.Map<LeaveRequestDetailsDto>(entity);
 
             if (leaveRequest == null)

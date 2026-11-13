@@ -31,6 +31,11 @@ public class DeleteLeaveTypeCommandHandler
                 request.Id);
         }
 
+        if (await _repository.IsInUseAsync(request.Id))
+        {
+            throw new BadRequestException("Ce type de congé est utilisé par des demandes ou des allocations et ne peut pas être supprimé.");
+        }
+
         await _repository.DeleteAsync(leaveType);
 
         return Unit.Value;

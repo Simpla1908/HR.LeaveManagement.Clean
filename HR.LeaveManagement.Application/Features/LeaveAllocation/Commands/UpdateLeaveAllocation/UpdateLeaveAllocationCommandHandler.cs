@@ -1,3 +1,4 @@
+using FluentValidation;
 using HR.LeaveManagement.Application.Contracts.Identity;
 using HR.LeaveManagement.Application.Contracts.Persistence;
 using HR.LeaveManagement.Application.Exceptions;
@@ -7,13 +8,21 @@ using MediatR;
 namespace HR.LeaveManagement.Application.Features.LeaveAllocations.Handlers.Commands;
 
 public sealed class UpdateLeaveAllocationCommandHandler(
-    ILeaveAllocationRepository allocations, IUserService user, IUnitOfWork unitOfWork)
+    ILeaveAllocationRepository allocations, IUserService user, IUnitOfWork unitOfWork,
+    IValidator<UpdateLeaveAllocationCommand> validator)
     : IRequestHandler<UpdateLeaveAllocationCommand, Unit>
 {
-    public Task<Unit> Handle(UpdateLeaveAllocationCommand request, CancellationToken cancellationToken)
+    public async Task<Unit> Handle(UpdateLeaveAllocationCommand request, CancellationToken cancellationToken)
     {
+        // Vérifier les données avant de lancer le traitement métier.
+        var validationResult = await validator.ValidateAsync(request, cancellationToken);
+        if (!validationResult.IsValid)
+        {
+            throw new BadRequestException("Validation failed", validationResult.Errors);
+        }
+
         if (!user.IsAdministrator) throw new ForbiddenException();
-        return unitOfWork.ExecuteAsync(async () =>
+        return await unitOfWork.ExecuteAsync(async () =>
         {
             var entity = await allocations.GetByIdAsync(request.Id)
                 ?? throw new NotFoundException("LeaveAllocation", request.Id);

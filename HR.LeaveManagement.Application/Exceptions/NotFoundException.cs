@@ -1,6 +1,7 @@
 ﻿
 namespace HR.LeaveManagement.Application.Exceptions;
 
+// Signale qu'une ressource recherchée n'existe pas.
 public class NotFoundException : Exception
 {
     public NotFoundException(string name, object key)

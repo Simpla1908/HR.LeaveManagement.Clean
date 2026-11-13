@@ -1,0 +1,48 @@
+@page "/connexion"
+@page "/login"
+@layout AuthLayout
+@inherits ApiPageBase
+@inject NavigationManager Navigation
+@inject IWebHostEnvironment Environment
+
+<PageTitle>Connexion · Congé</PageTitle>
+<section class="auth-story">
+    <a class="brand auth-brand" href="/connexion"><span class="brand-mark"><AppIcon Name="calendar" /></span><span>congé<span class="brand-dot">.</span><small>ESPACE RESSOURCES HUMAINES</small></span></a>
+    <div class="story-content"><span class="story-tag"><span class="connection-dot"></span> VOTRE TEMPS A DE LA VALEUR</span><h1>Bien gérer les congés.<br /><em>Mieux vivre le travail.</em></h1><p>Un espace commun pour organiser les absences, accompagner les équipes et prendre le temps de souffler.</p>
+        <div class="calendar-art" aria-hidden="true"><div class="art-note"><span class="art-check">✓</span><div><strong>Tout est organisé</strong><small>Place à la sérénité.</small></div></div><div class="art-calendar"><div class="art-calendar-header"><span>Un peu de temps pour soi</span><AppIcon Name="calendar" /></div><div class="art-days">@foreach (var day in new[] { "L", "M", "M", "J", "V", "S", "D" }) { <span>@day</span> }@for (var day = 1; day <= 28; day++) { <span class="@(day >= 15 && day <= 19 ? "art-selected" : "")">@day</span> }</div><div class="art-calendar-footer"><span class="connection-dot"></span> L'équilibre se prépare ensemble.</div></div></div>
+    </div><p class="story-footer">Les bonnes équipes prennent aussi le temps de se reposer.</p>
+</section>
+<section class="auth-form-side">
+    <div class="auth-form-card">
+        <span class="section-label">BIENVENUE DANS VOTRE ESPACE</span>
+        <h2>Heureux de vous retrouver.</h2><p class="muted">Connectez-vous pour retrouver votre équipe et vos congés.</p>
+        <Feedback Error="@Error" Success="@Success" Busy="@IsBusy" />
+        <EditForm Model="model" OnValidSubmit="SignIn" FormName="login">
+            <DataAnnotationsValidator />
+            <fieldset disabled="@IsBusy">
+                <div class="field"><label for="login-email">Adresse e-mail</label><InputText id="login-email" type="email" class="form-control" autocomplete="username" placeholder="vous@entreprise.com" @bind-Value="model.Email" /><ValidationMessage For="() => model.Email" /></div>
+                <div class="field"><label for="login-password">Mot de passe</label><div class="password-field"><InputText id="login-password" type="@(showPassword ? "text" : "password")" class="form-control" autocomplete="current-password" @bind-Value="model.Password" /><button type="button" class="password-toggle" aria-label="Afficher ou masquer le mot de passe" aria-pressed="@showPassword" @onclick="TogglePassword">@(showPassword ? "Masquer" : "Afficher")</button></div><ValidationMessage For="() => model.Password" /></div>
+                <button class="button primary full-width login-submit" type="submit">@(IsBusy ? "Connexion en cours…" : "Se connecter")<AppIcon Name="arrow" /></button>
+            </fieldset>
+        </EditForm>
+        <div class="login-help"><AppIcon Name="shield" /><span>Administrateurs et employés utilisent le même formulaire. Votre rôle détermine les accès.</span></div>
+        @if (Environment.IsDevelopment()) { <p class="auth-bottom">Premier accès ? <a href="/inscription">Créer un compte employé</a></p> }
+        <p class="auth-contact">Besoin d'un accès ? Contactez votre administrateur RH.</p>
+    </div>
+</section>
+@code {
+    private LoginModel model = new();
+    private bool showPassword;
+    protected override Task OnInitializedAsync()
+    {
+        if (Api.IsSignedIn) Navigation.NavigateTo("/");
+        return Task.CompletedTask;
+    }
+    private void TogglePassword() => showPassword = !showPassword;
+    private Task SignIn() => RunAsync(async () =>
+    {
+        await Api.LoginAsync(model);
+        model.Password = "";
+        Navigation.NavigateTo("/");
+    });
+}

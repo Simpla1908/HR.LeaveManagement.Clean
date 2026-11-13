@@ -1,6 +1,15 @@
-﻿<Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
+<Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
     <Found Context="routeData">
-        <RouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)" />
+        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
+            <NotAuthorized Context="authentication">
+                @if (authentication.User.Identity?.IsAuthenticated == true)
+                {
+                    <div class="panel access-denied"><AppIcon Name="shield" /><h1>Un espace réservé</h1><p>Votre rôle ne permet pas d'accéder à cette page.</p><a class="button primary" href="/">Revenir à mon espace</a></div>
+                }
+                else { <RedirectToLogin /> }
+            </NotAuthorized>
+            <Authorizing><p role="status">Vérification de votre accès…</p></Authorizing>
+        </AuthorizeRouteView>
         <FocusOnNavigate RouteData="routeData" Selector="h1" />
     </Found>
 </Router>

@@ -2,7 +2,7 @@
 using System.Reflection;
 using AutoMapper;
 using FluentValidation;
-using HR.LeaveManagement.Application.Behaviors;
+using HR.LeaveManagement.Application.Features.LeaveRequest.Shared;
 using MediatR;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -15,21 +15,18 @@ public static class ApplicationServiceRegistration
     {
         // Obtenir l'assembly Application.
         var assembly = Assembly.GetExecutingAssembly();
-        services.AddScoped<Services.LeaveRequestWorkflow>();
+        services.AddScoped<LeaveRequestNotification>();
 
         // Enregistrer les profils AutoMapper.
         services.AddAutoMapper(cfg => { }, assembly);
 
-        // Enregistrer les handlers et le pipeline.
+        // Enregistrer les handlers MediatR.
         services.AddMediatR(cfg =>
         {
             cfg.RegisterServicesFromAssembly(assembly);
-
-            cfg.AddOpenBehavior(
-                typeof(ValidationBehavior<,>));
         });
 
-        // Découvrir automatiquement les validateurs.
+        // Les validateurs sont injectés puis appelés directement dans les handlers.
         services.AddValidatorsFromAssembly(assembly);
 
         return services;

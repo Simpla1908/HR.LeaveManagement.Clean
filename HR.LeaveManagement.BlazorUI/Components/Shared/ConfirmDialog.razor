@@ -1,0 +1,23 @@
+@inject IJSRuntime JS
+<dialog @ref="dialog" class="confirm-dialog" aria-labelledby="confirm-title" @onkeydown="OnKeyDown">
+    <div class="dialog-icon"><AppIcon Name="trash" /></div>
+    <h2 id="confirm-title">@Title</h2><p>@Description</p>
+    <div class="form-actions"><button type="button" class="button secondary" disabled="@Busy" autofocus @onclick="OnCancel">Annuler</button><button type="button" class="button danger" disabled="@Busy" @onclick="OnConfirm">@(Busy ? "Traitement…" : ConfirmText)</button></div>
+</dialog>
+@code {
+    [Parameter] public string Title { get; set; } = "Supprimer cet élément ?";
+    [Parameter] public string Description { get; set; } = "Cette action est définitive.";
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public string ConfirmText { get; set; } = "Confirmer la suppression";
+    [Parameter] public EventCallback OnConfirm { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+    private ElementReference dialog;
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await JS.InvokeVoidAsync("leaveUi.openDialog", dialog);
+    }
+    private async Task OnKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape" && !Busy) await OnCancel.InvokeAsync();
+    }
+}

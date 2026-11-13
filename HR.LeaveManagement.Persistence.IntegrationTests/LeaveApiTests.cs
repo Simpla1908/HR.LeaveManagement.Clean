@@ -179,6 +179,62 @@ public sealed class LeaveApiTests(ApiFixture fixture) : IClassFixture<ApiFixture
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    [Theory]
+    [InlineData("create-type", "Name")]
+    [InlineData("update-type", "DefaultDays")]
+    [InlineData("create-allocation", "LeaveTypeId")]
+    [InlineData("update-allocation", "NumberOfDays")]
+    [InlineData("create-request", "RequestComments")]
+    [InlineData("update-request", "RequestComments")]
+    public async Task Command_handlers_reject_invalid_data_before_saving(string operation, string invalidProperty)
+    {
+        await fixture.ResetAsync();
+        var requestId = await fixture.SeedRequestAsync();
+        using var scope = fixture.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<HrDatabaseContext>();
+        var allocationId = await db.LeaveAllocations
+            .Where(x => x.EmployeeId == fixture.EmployeeId && x.Period == 2030)
+            .Select(x => x.Id).SingleAsync(TestContext.Current.CancellationToken);
+        var typeCount = await db.LeaveTypes.CountAsync(TestContext.Current.CancellationToken);
+        var allocationCount = await db.LeaveAllocations.CountAsync(TestContext.Current.CancellationToken);
+        var longComments = new string('x', 1001);
+
+        (HttpMethod Method, string Path, object Command) invalidCommand = operation switch
+        {
+            "create-type" => (HttpMethod.Post, "api/LeaveTypes", new { name = "", defaultDays = 10 }),
+            "update-type" => (HttpMethod.Put, "api/LeaveTypes/1", new { id = 1, name = "Invalid", defaultDays = 0 }),
+            "create-allocation" => (HttpMethod.Post, "api/LeaveAllocations", new { leaveTypeId = 999 }),
+            "update-allocation" => (HttpMethod.Put, $"api/LeaveAllocations/{allocationId}",
+                new { id = allocationId, leaveTypeId = 1, period = 2030, numberOfDays = -1 }),
+            "create-request" => (HttpMethod.Post, "api/LeaveRequests",
+                new { startDate = "2030-01-01", endDate = "2030-01-02", leaveTypeId = 1, requestComments = longComments }),
+            "update-request" => (HttpMethod.Put, $"api/LeaveRequests/{requestId}",
+                new { id = requestId, startDate = "2030-01-01", endDate = "2030-01-02", leaveTypeId = 1, requestComments = longComments }),
+            _ => throw new ArgumentException("Unknown operation", nameof(operation))
+        };
+
+        using var admin = fixture.CreateClient(fixture.AdminToken);
+        using var request = new HttpRequestMessage(invalidCommand.Method, invalidCommand.Path)
+        {
+            Content = JsonContent.Create(invalidCommand.Command)
+        };
+        using var response = await admin.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        var problem = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(problem.TryGetProperty("errors", out var errors), problem.GetRawText());
+        Assert.True(errors.TryGetProperty(invalidProperty, out _), problem.GetRawText());
+        Assert.Equal(typeCount, await db.LeaveTypes.CountAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(allocationCount, await db.LeaveAllocations.CountAsync(TestContext.Current.CancellationToken));
+        var savedRequest = await db.LeaveRequests.AsNoTracking().SingleAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(requestId, savedRequest.Id);
+        Assert.Null(savedRequest.RequestComments);
+        Assert.Null(savedRequest.Approved);
+        Assert.Equal(10, await fixture.BalanceAsync());
+    }
+
     [Fact]
     public async Task Annual_allocations_are_not_created_twice()
     {

@@ -1,0 +1,43 @@
+@page "/types-conge"
+@attribute [Authorize(Roles = "Administrator")]
+@inherits ApiPageBase
+<PageTitle>Types de congé · Congé</PageTitle>
+<PageHeader Eyebrow="ADMINISTRATION / PARAMÉTRAGE" Title="À chaque absence, son cadre." Description="Définissez les catégories de congé et leurs quotas annuels par défaut.">
+    <button class="button primary" disabled="@IsBusy" @onclick="NewType"><AppIcon Name="plus" />Ajouter un type</button>
+</PageHeader>
+<Feedback Error="@Error" Success="@Success" Busy="@IsBusy" />
+<div class="inline-notice"><span class="notice-icon"><AppIcon Name="calendar" /></span><div><strong>Des règles claires dès le départ.</strong><p>Le quota par défaut est utilisé pour les nouvelles allocations. Modifier un type ne change pas les soldes déjà attribués.</p></div></div>
+<div class="management-grid @(form is not null ? "with-editor" : "")">
+<section class="panel"><div class="panel-heading"><div><h2>Votre catalogue de congés <span class="count">@types.Count</span></h2><p>Les catégories disponibles pour votre équipe.</p></div><button class="button subtle" disabled="@IsBusy" @onclick="Refresh">Actualiser</button></div>
+<div class="table-toolbar"><div class="search-field"><AppIcon Name="search" /><input type="search" aria-label="Rechercher un type de congé" placeholder="Rechercher un type de congé…" @bind="search" @bind:event="oninput" /></div></div>
+@if (!IsBusy && Filtered.Count == 0) { <EmptyState Icon="calendar" Title="Le catalogue attend vos idées" Description="Ajoutez un type de congé ou modifiez votre recherche." /> }
+else
+{
+<div class="table-wrap"><table><thead><tr><th>Type de congé</th><th>Quota par défaut</th><th class="text-right">Actions</th></tr></thead><tbody>@foreach (var item in Filtered) { <tr @key="item.Id"><td><div class="person"><span class="category-symbol"><AppIcon Name="calendar" /></span><span><strong>@item.Name</strong><small>Référence #@item.Id</small></span></div></td><td><span class="days-value">@item.DefaultDays</span> <span class="muted">jours / an</span></td><td><div class="row-actions"><button class="icon-button" title="Modifier" aria-label="@($"Modifier {item.Name}")" disabled="@IsBusy" @onclick="() => Edit(item)"><AppIcon Name="edit" /></button><button class="icon-button destructive" title="Supprimer" aria-label="@($"Supprimer {item.Name}")" disabled="@IsBusy" @onclick="() => deleteTarget = item"><AppIcon Name="trash" /></button></div></td></tr> }</tbody></table></div>
+}
+<div class="table-footer">@Filtered.Count type(s) affiché(s)<a class="text-link" href="/allocations">Gérer les allocations <AppIcon Name="arrow" /></a></div></section>
+@if (form is not null)
+{
+<aside class="panel editor-panel" @key="form"><div class="panel-heading"><div><span class="section-label">CATALOGUE</span><h2>@(form.Id == 0 ? "Un nouveau type" : "Modifier le type")</h2></div><button class="icon-button" aria-label="Fermer le formulaire" disabled="@IsBusy" @onclick="Close"><AppIcon Name="close" /></button></div>
+<EditForm Model="form" OnValidSubmit="Save" FormName="type-editor"><DataAnnotationsValidator /><ValidationSummary /><fieldset disabled="@IsBusy">
+<div class="field"><label for="type-name">Nom du type</label><InputText id="type-name" class="form-control" placeholder="Ex. Congé annuel" @bind-Value="form.Name" /><ValidationMessage For="() => form.Name" /></div>
+<div class="field"><label for="type-days">Nombre de jours par défaut</label><InputNumber id="type-days" class="form-control" min="1" max="99" @bind-Value="form.DefaultDays" /><ValidationMessage For="() => form.DefaultDays" /><small>De 1 à 99 jours. Le quota sera appliqué aux nouvelles allocations.</small></div>
+<div class="form-actions"><button class="button primary" type="submit"><AppIcon Name="check" />Enregistrer</button><button class="button secondary" type="button" @onclick="Close">Annuler</button></div>
+</fieldset></EditForm></aside>
+}
+</div>
+@if (deleteTarget is not null) { <ConfirmDialog Title="Supprimer ce type de congé ?" Description="@($"« {deleteTarget.Name} » sera supprimé. Un type utilisé par une demande ou une allocation doit être conservé.")" Busy="@IsBusy" OnCancel="CancelDelete" OnConfirm="Delete" /> }
+@code {
+    private List<LeaveTypeModel> types = [];
+    private LeaveTypeModel? form, deleteTarget;
+    private string search = "";
+    private List<LeaveTypeModel> Filtered => types.Where(x => x.Name.Contains(search, StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.Name).ToList();
+    protected override async Task LoadAsync() => types = await Api.GetTypesAsync();
+    private Task Refresh() => RunAsync(LoadAsync);
+    private void NewType() => form = new();
+    private void Close() => form = null;
+    private void CancelDelete() => deleteTarget = null;
+    private void Edit(LeaveTypeModel item) => form = new() { Id = item.Id, Name = item.Name, DefaultDays = item.DefaultDays };
+    private Task Save() => RunAsync(async () => { await Api.SaveTypeAsync(form!); form = null; await LoadAsync(); }, "Le type de congé a été enregistré.");
+    private Task Delete() => RunAsync(async () => { var id = deleteTarget!.Id; deleteTarget = null; await Api.DeleteTypeAsync(id); if (form?.Id == id) form = null; await LoadAsync(); }, "Le type de congé a été supprimé.");
+}

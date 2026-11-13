@@ -8,6 +8,25 @@ namespace HR.LeaveManagement.Application.UnitTests;
 public class ApiClientTests
 {
     [Fact]
+    public async Task Blazor_authentication_state_follows_login_and_logout()
+    {
+        var client = new LeaveApiClient(new TestFactory(new RecordingHandler()));
+        using var provider = new ApiAuthenticationStateProvider(client);
+        Assert.False((await provider.GetAuthenticationStateAsync()).User.Identity!.IsAuthenticated);
+        var changes = 0;
+        provider.AuthenticationStateChanged += _ => changes++;
+
+        await client.LoginAsync(new LoginModel());
+        var authenticated = (await provider.GetAuthenticationStateAsync()).User;
+        Assert.True(authenticated.Identity!.IsAuthenticated);
+        Assert.True(authenticated.IsInRole("Employee"));
+        Assert.False(authenticated.IsInRole("Administrator"));
+        client.Logout();
+        Assert.False((await provider.GetAuthenticationStateAsync()).User.Identity!.IsAuthenticated);
+        Assert.True(changes >= 2);
+    }
+
+    [Fact]
     public async Task Tokens_are_scoped_to_each_client_and_removed_on_logout()
     {
         var handler = new RecordingHandler();

@@ -1,0 +1,10 @@
+<div aria-live="polite" aria-atomic="true">
+    @if (!string.IsNullOrWhiteSpace(Error)) { <div class="feedback error" role="alert">@Error</div> }
+    @if (!string.IsNullOrWhiteSpace(Success)) { <div class="feedback success" role="status"><AppIcon Name="check" />@Success</div> }
+    @if (Busy) { <div class="loading-line" role="status"><span class="spinner"></span> Chargement en cours…</div> }
+</div>
+@code {
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public string? Success { get; set; }
+    [Parameter] public bool Busy { get; set; }
+}

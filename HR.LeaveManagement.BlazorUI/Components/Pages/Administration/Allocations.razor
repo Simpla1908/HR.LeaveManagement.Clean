@@ -1,0 +1,79 @@
+@page "/allocations"
+@attribute [Authorize]
+@inherits ApiPageBase
+<PageTitle>Allocations · Congé</PageTitle>
+<PageHeader Eyebrow="CONGÉS / SOLDES ANNUELS" Title="Du temps, bien réparti." Description="Consultez les jours disponibles par personne, par type de congé et par année.">
+    @if (IsAdmin) { <button class="button primary" disabled="@IsBusy" @onclick="NewAllocation"><AppIcon Name="plus" />Attribuer les quotas</button> }
+    else { <a class="button primary" href="/demandes"><AppIcon Name="plus" />Faire une demande</a> }
+</PageHeader>
+<Feedback Error="@Error" Success="@Success" Busy="@IsBusy" />
+<div class="metrics-row"><div><span class="metric-dot teal"></span><strong>@Filtered.Sum(x => x.NumberOfDays)</strong> jours disponibles dans la sélection</div><div><span class="metric-dot violet"></span><strong>@Filtered.Count</strong> allocations</div><div><AppIcon Name="calendar" /> Année courante : @DateTime.UtcNow.Year</div></div>
+<div class="management-grid @(form is not null ? "with-editor" : "")">
+<section class="panel"><div class="panel-heading"><div><h2>@(IsAdmin ? "Les allocations de l'équipe" : "Mes jours disponibles")</h2><p>Un solde est débité uniquement après approbation d'une demande.</p></div><button class="button subtle" disabled="@IsBusy" @onclick="Refresh">Actualiser</button></div>
+<div class="table-toolbar"><div class="search-field"><AppIcon Name="search" /><input type="search" aria-label="Rechercher une allocation" placeholder="Rechercher une personne, un type…" @bind="search" @bind:event="oninput" /></div><select class="form-select filter-select" aria-label="Filtrer par année" @bind="year"><option value="0">Toutes les années</option>@foreach (var value in allocations.Select(x => x.Period).Append(DateTime.UtcNow.Year).Distinct().OrderDescending()) { <option value="@value">@value</option> }</select></div>
+@if (!IsBusy && Filtered.Count == 0) { <EmptyState Icon="layers" Title="Aucune allocation pour cette sélection" Description="Les quotas attribués apparaîtront ici. Pour obtenir un quota, contactez votre administrateur." /> }
+else
+{
+<div class="table-wrap"><table><thead><tr>@if (IsAdmin) { <th>Collaborateur</th> }<th>Type de congé</th><th>Année</th><th>Solde disponible</th>@if (IsAdmin) { <th class="text-right">Actions</th> }</tr></thead><tbody>
+@foreach (var item in Filtered) { <tr @key="item.Id">@if (IsAdmin) { <td><strong>@EmployeeName(item)</strong></td> }<td>@item.LeaveType.Name</td><td><span class="year-tag">@item.Period</span></td><td><span class="balance-value @(item.NumberOfDays == 0 ? "zero" : "")">@item.NumberOfDays <small>jours</small></span></td>@if (IsAdmin) { <td><div class="row-actions"><button class="icon-button" title="Modifier le solde (année courante ou future)" aria-label="@($"Modifier le solde de {EmployeeName(item)}")" disabled="@(IsBusy || item.Period < DateTime.Today.Year)" @onclick="() => Edit(item)"><AppIcon Name="edit" /></button><button class="icon-button destructive" title="Supprimer" aria-label="@($"Supprimer l'allocation de {EmployeeName(item)}")" disabled="@IsBusy" @onclick="() => deleteTarget = item"><AppIcon Name="trash" /></button></div></td> }</tr> }
+</tbody></table></div>
+}
+<div class="table-footer">@Filtered.Count allocation(s) affichée(s)<span>Jours calendaires · dates de congé incluses</span></div></section>
+@if (form is not null && IsAdmin)
+{
+<aside class="panel editor-panel" @key="form"><div class="panel-heading"><div><span class="section-label">SOLDES ANNUELS</span><h2>@(form.Id == 0 ? "Attribuer les quotas" : "Ajuster le solde")</h2></div><button class="icon-button" aria-label="Fermer le formulaire" disabled="@IsBusy" @onclick="Close"><AppIcon Name="close" /></button></div>
+<EditForm Model="form" OnValidSubmit="Save" FormName="allocation-editor"><DataAnnotationsValidator /><ValidationSummary /><fieldset disabled="@IsBusy">
+@if (form.Id == 0)
+{
+    <p class="muted">Créez les allocations manquantes pour tous les employés, pour l'année @DateTime.UtcNow.Year. Les soldes existants sont conservés.</p>
+    <div class="field"><label for="allocation-type">Type de congé</label><InputSelect id="allocation-type" class="form-select" @bind-Value="form.LeaveTypeId"><option value="0">Sélectionner un type</option>@foreach (var type in types) { <option value="@type.Id">@type.Name · @type.DefaultDays jours</option> }</InputSelect><ValidationMessage For="() => form.LeaveTypeId" /></div>
+    <div class="field"><label>Année d'attribution</label><div class="readonly-value">@DateTime.UtcNow.Year</div></div>
+    <div class="tip"><strong>Comment fonctionne l'attribution ?</strong><p>Chaque employé sans allocation pour ce type et cette année recevra le quota par défaut du type sélectionné.</p></div>
+}
+else
+{
+    <div class="field"><label>Collaborateur</label><div class="readonly-value">@editingEmployee</div></div>
+    <div class="field"><label>Type et année</label><div class="readonly-value">@editingType · @form.Period</div><small>Le type et l'année d'une allocation existante ne peuvent pas être changés.</small></div>
+    <div class="field"><label for="allocation-days">Nouveau solde disponible</label><InputNumber id="allocation-days" class="form-control" min="0" @bind-Value="form.NumberOfDays" /><ValidationMessage For="() => form.NumberOfDays" /></div>
+}
+<div class="form-actions"><button class="button primary" type="submit"><AppIcon Name="check" />@(form.Id == 0 ? "Attribuer les quotas" : "Enregistrer")</button><button class="button secondary" type="button" @onclick="Close">Annuler</button></div>
+</fieldset></EditForm></aside>
+}
+</div>
+@if (deleteTarget is not null) { <ConfirmDialog Title="Supprimer cette allocation ?" Description="@($"L'allocation {deleteTarget.LeaveType.Name} de {EmployeeName(deleteTarget)} pour {deleteTarget.Period} sera supprimée. Une allocation liée à une demande approuvée active ne peut pas être supprimée.")" Busy="@IsBusy" OnCancel="CancelDelete" OnConfirm="Delete" /> }
+@code {
+    private List<AllocationModel> allocations = [];
+    private List<LeaveTypeModel> types = [];
+    private List<UserModel> users = [];
+    private AllocationFormModel? form;
+    private AllocationModel? deleteTarget;
+    private string search = "", editingEmployee = "", editingType = "";
+    private int year;
+    private bool IsAdmin => Api.User?.IsAdministrator == true;
+    private List<AllocationModel> Filtered => allocations.Where(x => (year == 0 || x.Period == year)
+        && $"{EmployeeName(x)} {x.LeaveType.Name}".Contains(search, StringComparison.OrdinalIgnoreCase))
+        .OrderByDescending(x => x.Period).ThenBy(EmployeeName).ToList();
+    private string EmployeeName(AllocationModel item) => users.FirstOrDefault(x => x.Id == item.EmployeeId)?.FullName
+        ?? (item.EmployeeId == Api.User?.UserId ? Api.User.UserName : item.EmployeeId);
+    protected override async Task LoadAsync()
+    {
+        allocations = await Api.GetAllocationsAsync();
+        types = await Api.GetTypesAsync();
+        if (IsAdmin) users = await Api.GetUsersAsync();
+    }
+    private Task Refresh() => RunAsync(LoadAsync);
+    private void NewAllocation() => form = new() { Period = DateTime.UtcNow.Year };
+    private void Close() => form = null;
+    private void CancelDelete() => deleteTarget = null;
+    private void Edit(AllocationModel item)
+    {
+        form = new() { Id = item.Id, LeaveTypeId = item.LeaveTypeId, Period = item.Period, NumberOfDays = item.NumberOfDays };
+        editingEmployee = EmployeeName(item); editingType = item.LeaveType.Name;
+    }
+    private Task Save() => RunAsync(async () =>
+    {
+        if (form!.Id == 0) await Api.AllocateAsync(form.LeaveTypeId); else await Api.SaveAllocationAsync(form);
+        form = null; await LoadAsync();
+    }, "Les allocations ont été mises à jour.");
+    private Task Delete() => RunAsync(async () => { var id = deleteTarget!.Id; deleteTarget = null; await Api.DeleteAllocationAsync(id); if (form?.Id == id) form = null; await LoadAsync(); }, "L'allocation a été supprimée.");
+}

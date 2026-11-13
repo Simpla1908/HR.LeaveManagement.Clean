@@ -1,6 +1,14 @@
-<div class="top-row ps-3 navbar navbar-dark">
-    <div class="container-fluid"><a class="navbar-brand" href="">Gestion des cong?s</a></div>
-</div>
-<nav class="nav flex-column p-3">
-    <NavLink class="nav-link text-white" href="" Match="NavLinkMatch.All">Mon espace cong?s</NavLink>
+@inject LeaveApiClient Api
+<nav class="app-nav">
+    <p class="nav-caption">VOTRE ESPACE</p>
+    <NavLink href="/" Match="NavLinkMatch.All" @onclick="OnNavigate"><AppIcon Name="dashboard" /><span>Vue d'ensemble</span></NavLink>
+    <NavLink href="/demandes" @onclick="OnNavigate"><AppIcon Name="requests" /><span>@(Api.User?.IsAdministrator == true ? "Demandes de congé" : "Mes demandes")</span></NavLink>
+    <NavLink href="/allocations" @onclick="OnNavigate"><AppIcon Name="layers" /><span>@(Api.User?.IsAdministrator == true ? "Allocations" : "Mes allocations")</span></NavLink>
+    @if (Api.User?.IsAdministrator == true)
+    {
+        <p class="nav-caption section-gap">ADMINISTRATION</p>
+        <NavLink href="/utilisateurs" @onclick="OnNavigate"><AppIcon Name="users" /><span>Utilisateurs</span></NavLink>
+        <NavLink href="/types-conge" @onclick="OnNavigate"><AppIcon Name="calendar" /><span>Types de congé</span></NavLink>
+    }
 </nav>
+@code { [Parameter] public EventCallback OnNavigate { get; set; } }

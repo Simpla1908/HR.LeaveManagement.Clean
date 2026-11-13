@@ -1,23 +1,34 @@
 @inherits LayoutComponentBase
+@implements IDisposable
+@inject LeaveApiClient Api
+@inject NavigationManager Navigation
 
-<div class="page">
-    <div class="sidebar">
-        <NavMenu />
+<div class="app-shell">
+    @if (menuOpen) { <button type="button" class="mobile-scrim" aria-label="Fermer le menu" @onclick="CloseMenu"></button> }
+    <aside class="side-panel @(menuOpen ? "is-open" : "")" aria-label="Navigation principale">
+        <a class="brand" href="/"><span class="brand-mark"><AppIcon Name="calendar" /></span><span>congé<span class="brand-dot">.</span><small>ESPACE RESSOURCES HUMAINES</small></span></a>
+        <NavMenu OnNavigate="CloseMenu" />
+        <div class="sidebar-note"><AppIcon Name="shield" /><strong>Du temps pour chacun.</strong><span>Une gestion claire pour une équipe sereine.</span></div>
+        <div class="sidebar-bottom"><span class="connection-dot"></span> Espace de travail sécurisé</div>
+    </aside>
+    <div class="workspace">
+        <header class="topbar">
+            <div class="topbar-left"><button type="button" class="icon-button mobile-menu" aria-label="Ouvrir le menu" aria-expanded="@menuOpen" @onclick="ToggleMenu"><AppIcon Name="menu" /></button><span>Ressources humaines</span><span class="breadcrumb-divider">/</span><strong>Espace de travail</strong></div>
+            <div class="topbar-right"><span class="today">@DateTime.Today.ToString("dd MMM yyyy", System.Globalization.CultureInfo.GetCultureInfo("fr-FR"))</span><span class="topbar-divider"></span><span class="avatar">@Initial</span><div class="user-caption"><strong>@Api.User?.UserName</strong><small>@(Api.User?.IsAdministrator == true ? "Administrateur" : "Employé")</small></div><button type="button" class="icon-button" title="Se déconnecter" aria-label="Se déconnecter" @onclick="Logout"><AppIcon Name="logout" /></button></div>
+        </header>
+        <main id="main-content" class="page-content">@Body</main>
+        <footer class="workspace-footer"><span>Congé · Gestion des ressources humaines</span><span>Un peu d'organisation. Beaucoup de sérénité.</span></footer>
     </div>
-
-    <main>
-        <div class="top-row px-4">
-            <span>HR ? Gestion des cong?s</span>
-        </div>
-
-        <article class="content px-4">
-            @Body
-        </article>
-    </main>
 </div>
+<div id="blazor-error-ui" data-nosnippet>Une erreur est survenue. <a href="." class="reload">Recharger la page</a><button type="button" class="dismiss" aria-label="Fermer">×</button></div>
 
-<div id="blazor-error-ui" data-nosnippet>
-    An unhandled error has occurred.
-    <a href="." class="reload">Reload</a>
-    <span class="dismiss">🗙</span>
-</div>
+@code {
+    private bool menuOpen;
+    private string Initial => string.Concat((Api.User?.UserName ?? "?").Take(1)).ToUpperInvariant();
+    protected override void OnInitialized() => Api.SessionChanged += OnSessionChanged;
+    private void OnSessionChanged() => _ = InvokeAsync(StateHasChanged);
+    private void CloseMenu() => menuOpen = false;
+    private void ToggleMenu() => menuOpen = !menuOpen;
+    private void Logout() { Api.Logout(); Navigation.NavigateTo("/connexion"); }
+    public void Dispose() => Api.SessionChanged -= OnSessionChanged;
+}

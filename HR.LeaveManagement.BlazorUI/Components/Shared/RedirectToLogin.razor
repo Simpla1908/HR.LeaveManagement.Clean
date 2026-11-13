@@ -1,0 +1,5 @@
+@inject NavigationManager Navigation
+<p role="status">Redirection vers la connexion…</p>
+@code {
+    protected override void OnInitialized() => Navigation.NavigateTo("/connexion", replace: true);
+}

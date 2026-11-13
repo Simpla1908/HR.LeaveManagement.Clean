@@ -57,7 +57,7 @@ Créer une demande ne réserve donc pas les jours. Plusieurs demandes peuvent re
 | Projet | Responsabilité | Points d’entrée |
 |---|---|---|
 | `Domain` | Décrire les données métier et leur identité. | [LeaveRequest](HR.LeaveManagement.Domain/LeaveRequest.cs), [LeaveAllocation](HR.LeaveManagement.Domain/LeaveAllocation.cs), [LeaveType](HR.LeaveManagement.Domain/LeaveType.cs). |
-| `Application` | Définir les cas d’utilisation, règles applicatives et contrats. | `Features`, `Services`, `Contracts`, `Behaviors`, `MappingProfiles`. |
+| `Application` | Définir les cas d’utilisation, règles applicatives et contrats. | `Features`, `Contracts`, `MappingProfiles`. |
 | `Persistence` | Implémenter l’accès SQL Server, les repositories et les transactions EF Core. | [HrDatabaseContext](HR.LeaveManagement.Persistence/DatabaseContext/HrDatabaseContext.cs), [UnitOfWork](HR.LeaveManagement.Persistence/UnitOfWork.cs). |
 | `Identity` | Gérer les comptes, mots de passe, rôles et JWT. | [AuthService](HR.LeaveManagement.Identity/Services/AuthService.cs), [UserService](HR.LeaveManagement.Identity/Services/UserService.cs). |
 | `Infrastructure` | Fournir les notifications et la journalisation. | [SmtpEmailSender](HR.LeaveManagement.Infrastructure/Services/SmtpEmailSender.cs), [AppLogger](HR.LeaveManagement.Infrastructure/Services/AppLogger.cs). |
@@ -94,7 +94,7 @@ Exemple d’inversion des dépendances :
 Application définit ILeaveRequestRepository
 Persistence fournit LeaveRequestRepository : ILeaveRequestRepository
 Api enregistre la correspondance dans le conteneur de services
-LeaveRequestWorkflow reçoit seulement ILeaveRequestRepository
+Les handlers de demandes reçoivent ILeaveRequestRepository
 ```
 
 `Application` peut demander « enregistrer cette demande » sans connaître SQL Server, `DbContext` ou les chaînes de connexion.
@@ -112,8 +112,9 @@ HR.LeaveManagement.Application/
 │   ├── LeaveType/
 │   ├── LeaveAllocation/
 │   └── LeaveRequest/
-├── Services/          Règles et orchestration des demandes
-├── Behaviors/         Traitements communs du pipeline MediatR
+│       ├── Commands/  Traitements des actions et transactions
+│       ├── Queries/   Lectures et filtrage des données
+│       └── Shared/    Règles communes et notifications
 ├── MappingProfiles/   Transformations AutoMapper
 ├── Models/            Messages et modèles des services
 └── Exceptions/        Erreurs reconnues par l’API
@@ -170,7 +171,7 @@ La combinaison `(EmployeeId, LeaveTypeId, Period)` possède un index unique : un
 
 L’annulation est une information séparée : elle ne remet pas nécessairement `Approved` à `null`. Pour interpréter l’état, il faut aussi regarder `Cancelled`.
 
-Dans cette solution, les entités décrivent surtout les données. La majorité des règles réside dans `Application`. Modifier directement une propriété de l’entité ne déclenche pas automatiquement les règles du workflow.
+Dans cette solution, les entités décrivent surtout les données. La majorité des règles réside dans les handlers d’`Application/Features/LeaveRequest` et dans son dossier `Shared`. Modifier directement une propriété de l’entité ne déclenche pas automatiquement les contrôles des handlers.
 
 ## 4. La couche Application
 
@@ -192,10 +193,10 @@ CQRS n’impose pas deux bases : ici, les commandes et les requêtes utilisent l
 | Élément | Rôle |
 |---|---|
 | Command / Query | Transporter les paramètres d’un cas d’utilisation. |
-| Handler | Recevoir le message et exécuter son traitement ou déléguer à un service. |
+| Handler | Recevoir le message, appeler son validateur s’il existe, puis exécuter le traitement ou déléguer à un service. |
 | Validator | Vérifier les données d’entrée avant le traitement. |
 | DTO | Définir les données retournées au client sans exposer toute l’entité. |
-| Workflow | Coordonner les règles et les écritures liées au cycle de vie des demandes. |
+| Shared | Regrouper les règles et notifications réutilisées par les handlers de la fonctionnalité. |
 
 Exemple réel de commande :
 
@@ -222,34 +223,68 @@ MediatR retrouve le handler associé au type du message :
 
 ```csharp
 public sealed class CreateLeaveRequestCommandHandler(
-    LeaveRequestWorkflow workflow)
+    ILeaveRequestRepository requests,
+    ILeaveAllocationRepository allocations,
+    IUserService user,
+    IUnitOfWork unitOfWork,
+    IMapper mapper,
+    LeaveRequestNotification notification,
+    IValidator<CreateLeaveRequestCommand> validator)
     : IRequestHandler<CreateLeaveRequestCommand, Unit>
 {
     public async Task<Unit> Handle(
         CreateLeaveRequestCommand request,
         CancellationToken cancellationToken)
     {
-        await workflow.CreateAsync(request, cancellationToken);
+        var validationResult = await validator.ValidateAsync(request, cancellationToken);
+        if (!validationResult.IsValid)
+        {
+            throw new BadRequestException("Validation failed", validationResult.Errors);
+        }
+
+        var employeeId = user.UserId ?? throw new ForbiddenException();
+
+        await unitOfWork.ExecuteAsync(async () =>
+        {
+            var days = LeaveRequestRules.GetDays(request.StartDate, request.EndDate);
+            var allocation = await allocations.GetUserAllocations(employeeId, request.LeaveTypeId, request.StartDate.Year)
+                ?? throw new BadRequestException("No allocation exists for this leave type and year.");
+
+            if (days > allocation.NumberOfDays)
+            {
+                throw new BadRequestException("Insufficient leave balance.");
+            }
+
+            var entity = mapper.Map<Domain.LeaveRequest>(request);
+            entity.RequestingEmployeeId = employeeId;
+            entity.DateRequested = DateTime.UtcNow;
+            await requests.CreateAsync(entity);
+            return true;
+        }, cancellationToken);
+
+        await notification.SendAsync(employeeId, "Leave request submitted");
         return Unit.Value;
     }
 }
 ```
 
-`IRequestHandler<CreateLeaveRequestCommand, Unit>` associe le handler au message et au type de réponse. Ici, il délègue les règles métier au workflow.
+`IRequestHandler<CreateLeaveRequestCommand, Unit>` associe le handler au message et au type de réponse. Le handler valide les données, vérifie le solde et enregistre la demande dans une transaction. La notification est envoyée après la transaction.
 
 MediatR fonctionne **dans le processus de l’API**. Ce n’est pas une file de messages entre serveurs.
 
-### 4.4. Pourquoi Commands reste utile avec le workflow
+### 4.4. Les traitements dans les handlers de commandes
 
-| Commande de demande | Méthode appelée dans le workflow |
+| Commande de demande | Handler qui porte le traitement |
 |---|---|
-| `CreateLeaveRequestCommand` | `CreateAsync` |
-| `UpdateLeaveRequestCommand` | `UpdateAsync` |
-| `ChangeLeaveRequestApprovalCommand` | `ChangeApprovalAsync` |
-| `CancelLeaveRequestCommand` | `CancelAsync` |
-| `DeleteLeaveRequestCommand` | `DeleteAsync` |
+| `CreateLeaveRequestCommand` | `CreateLeaveRequestCommandHandler` |
+| `UpdateLeaveRequestCommand` | `UpdateLeaveRequestCommandHandler` |
+| `ChangeLeaveRequestApprovalCommand` | `ChangeLeaveRequestApprovalCommandHandler` |
+| `CancelLeaveRequestCommand` | `CancelLeaveRequestCommandHandler` |
+| `DeleteLeaveRequestCommand` | `DeleteLeaveRequestCommandHandler` |
 
-Les commandes définissent les actions acceptées et leurs données. Les handlers fournissent leurs points de traitement MediatR. Le workflow rassemble les règles communes, les changements de solde et les notifications.
+Les commandes définissent les actions acceptées et leurs données. Chaque handler contient directement les vérifications, la transaction et les écritures de son action. Tout ce code se trouve dans `Features/LeaveRequest`.
+
+Dans `Shared`, `LeaveRequestRules` regroupe le calcul des jours et le contrôle propriétaire/administrateur. `LeaveRequestNotification` regroupe l’envoi des emails pour éviter de répéter ce code dans les quatre handlers qui notifient le demandeur.
 
 ### 4.5. Différence avec LeaveAllocation/Commands
 
@@ -263,32 +298,47 @@ Les commandes d’allocation administrent les soldes annuels. Leurs handlers uti
 
 Ces trois handlers exigent un administrateur.
 
-Créer une allocation ne crée donc aucune demande : cela fournit le solde que le workflow vérifiera et ajustera.
+Créer une allocation ne crée donc aucune demande : cela fournit le solde que les handlers de demandes vérifieront et ajusteront.
 
-### 4.6. ValidationBehavior
+### 4.6. Validation explicite dans les handlers
 
-[ValidationBehavior.cs](HR.LeaveManagement.Application/Behaviors/ValidationBehavior.cs) implémente `IPipelineBehavior<TRequest, TResponse>`. Lors d’un `Send` :
+Chaque handler de commande disposant d’un validateur reçoit un `IValidator<SaCommande>` dans son constructeur. Il appelle ce validateur au début de `Handle`, avant tout traitement métier :
 
-1. Il récupère les `IValidator<TRequest>` enregistrés.
-2. Il exécute chaque validateur et regroupe les erreurs.
-3. Il lève `BadRequestException` si des erreurs existent.
-4. Sinon, il appelle `next(cancellationToken)` pour poursuivre.
+```csharp
+var validationResult = await validator.ValidateAsync(request, cancellationToken);
+
+if (!validationResult.IsValid)
+{
+    throw new BadRequestException("Validation failed", validationResult.Errors);
+}
+```
+
+`ValidateAsync` vérifie les règles définies par le validateur. `IsValid` indique si les données sont acceptables. En cas d’erreur, l’exception interrompt le handler et l’API renvoie HTTP 400 avec les messages. Sinon, les instructions suivantes s’exécutent normalement.
 
 ```text
 _sender.Send(...)
-    → ValidationBehavior
-    → Validator(s)
     → Handler
-    → Workflow ou repositories
+    → Validator de la commande
+    → Règles, transaction et repositories dans le handler
 ```
 
 Le validateur de création de demande réutilise `BaseLeaveRequestValidator`, puis limite les commentaires à 1 000 caractères. Les règles communes contrôlent les dates, l’année unique et l’existence du type.
+
+Les sept handlers concernés sont ceux de création et modification des types, des allocations et des demandes, ainsi que celui d’approbation des demandes. Les queries, annulations et suppressions n’ont pas de validateur dédié actuellement ; leurs contrôles d’accès, d’existence et d’état restent dans leurs traitements.
+
+Lors de l’ajout d’une nouvelle commande avec un validateur, injecter celui-ci et l’appeler dans le handler. Enregistrer un validateur dans le conteneur ne suffit pas à l’exécuter.
 
 La validation ne remplace pas les vérifications métier transactionnelles : un solde peut changer entre la validation d’entrée et l’approbation.
 
 ### 4.7. AutoMapper
 
-[LeaveManagementProfile.cs](HR.LeaveManagement.Application/MappingProfiles/LeaveManagementProfile.cs) déclare les conversions entre commandes, entités et DTO.
+Les conversions entre commandes, entités et DTO sont réparties par fonctionnalité :
+
+- [LeaveAllocationProfile.cs](HR.LeaveManagement.Application/MappingProfiles/LeaveAllocationProfile.cs) : mappings des allocations.
+- [LeaveRequestProfile.cs](HR.LeaveManagement.Application/MappingProfiles/LeaveRequestProfile.cs) : mappings des demandes.
+- [LeaveTypeProfile.cs](HR.LeaveManagement.Application/MappingProfiles/LeaveTypeProfile.cs) : mappings des types de congé.
+
+Ces profils sont découverts automatiquement par `AddAutoMapper` dans `ApplicationServiceRegistration.cs`.
 
 ```csharp
 // Créer une entité à partir d’une commande.
@@ -309,19 +359,20 @@ AutoMapper copie des données ; il ne remplace ni les droits d’accès ni les r
 [ApplicationServiceRegistration.cs](HR.LeaveManagement.Application/ApplicationServiceRegistration.cs) enregistre notamment :
 
 ```csharp
-services.AddScoped<Services.LeaveRequestWorkflow>();
+services.AddScoped<LeaveRequestNotification>();
 services.AddAutoMapper(cfg => { }, assembly);
 
 services.AddMediatR(cfg =>
 {
     cfg.RegisterServicesFromAssembly(assembly);
-    cfg.AddOpenBehavior(typeof(ValidationBehavior<,>));
 });
 
 services.AddValidatorsFromAssembly(assembly);
 ```
 
 L’assembly est le module compilé contenant les types d’Application. Les handlers, profils et validateurs y sont découverts.
+
+`AddValidatorsFromAssembly` permet d’injecter les validateurs. Leur exécution est demandée explicitement dans les handlers avec `ValidateAsync`.
 
 Les autres couches enregistrent leurs implémentations :
 
@@ -330,7 +381,7 @@ services.AddScoped<ILeaveRequestRepository, LeaveRequestRepository>();
 services.AddScoped<IUnitOfWork, UnitOfWork>();
 ```
 
-Quand le workflow demande une interface dans son constructeur, le conteneur lui fournit l’implémentation correspondante.
+Quand un handler demande une interface dans son constructeur, le conteneur lui fournit l’implémentation correspondante. `LeaveRequestRules` est statique et ne nécessite pas d’enregistrement ; `LeaveRequestNotification` est injecté dans les handlers qui envoient un email.
 
 `Scoped` signifie une instance par portée : généralement une requête HTTP dans l’API, et un circuit utilisateur pour ces services Blazor interactifs. Les repositories et l’unité de travail de l’API partagent ainsi le contexte EF Core de leur portée.
 
@@ -383,7 +434,7 @@ sequenceDiagram
     participant U as IUserService
     B->>C: GET api/LeaveRequests + Bearer JWT
     C->>M: Send(GetLeaveRequestListQuery)
-    M->>H: Handle après le pipeline
+    M->>H: Handle
     H->>R: Charger les demandes autorisées
     R-->>H: Entités et types de congé
     H->>U: Charger les informations employé
@@ -394,7 +445,7 @@ sequenceDiagram
 
 ### 5.2. Créer une demande
 
-Dans [LeaveRequestWorkflow.CreateAsync](HR.LeaveManagement.Application/Services/LeaveRequestWorkflow.cs) :
+Dans [CreateLeaveRequestCommandHandler.Handle](HR.LeaveManagement.Application/Features/LeaveRequest/Commands/CreateLeaveRequest/CreateLeaveRequestCommandHandler.cs), après validation des données :
 
 1. Lire `user.UserId` ; refuser si l’identifiant est absent.
 2. Ouvrir l’opération transactionnelle via `IUnitOfWork`.
@@ -408,20 +459,20 @@ L’identité du demandeur provient du contexte connecté, pas d’un identifian
 
 ### 5.3. Approuver ou rejeter
 
-`ChangeApprovalAsync` exige un administrateur et refuse une demande annulée.
+`ChangeLeaveRequestApprovalCommandHandler` exige un administrateur et refuse une demande annulée.
 
 Si la décision correspond déjà à la valeur de `Approved`, il ne modifie pas le solde et ne renvoie pas d’employé à notifier.
 
 Pour une approbation :
 
-- Calculer les jours avec `LeaveDuration.GetDays`.
+- Calculer les jours avec `LeaveRequestRules.GetDays`.
 - Charger l’allocation du bon employé, du bon type et de `StartDate.Year`.
 - Refuser si le solde est insuffisant.
 - Soustraire les jours de `NumberOfDays`.
 - Affecter le nombre soustrait à `DeductedDays` et mettre `Approved = true`.
 - Enregistrer l’allocation et la demande dans la même transaction.
 
-Lorsqu’une approbation devient un rejet, le workflow restitue `DeductedDays`, remet ce compteur à zéro et fixe `Approved = false`. Rejeter directement une demande en attente ne nécessite pas de restituer des jours.
+Lorsqu’une approbation devient un rejet, le handler restitue `DeductedDays`, remet ce compteur à zéro et fixe `Approved = false`. Rejeter directement une demande en attente ne nécessite pas de restituer des jours.
 
 ### 5.4. Annuler, modifier et supprimer
 
@@ -433,9 +484,9 @@ Lorsqu’une approbation devient un rejet, le workflow restitue `DeductedDays`, 
 
 Répéter une approbation identique ou une annulation ne doit pas appliquer deux fois le même mouvement de solde. C’est l’**idempotence** de ces actions.
 
-### 5.5. LeaveDuration : calculer les jours
+### 5.5. LeaveRequestRules : calculer les jours
 
-[LeaveDuration.cs](HR.LeaveManagement.Application/Services/LeaveDuration.cs) centralise la durée :
+[LeaveRequestRules.cs](HR.LeaveManagement.Application/Features/LeaveRequest/Shared/LeaveRequestRules.cs) centralise la durée dans sa méthode `GetDays` :
 
 ```csharp
 return (end.Date - start.Date).Days + 1;
@@ -507,7 +558,7 @@ Task<T> ExecuteAsync<T>(
     CancellationToken cancellationToken = default);
 ```
 
-Le contrat accepte une fonction asynchrone retournant un résultat de type `T`. Le workflow lui fournit le groupe d’opérations à exécuter.
+Le contrat accepte une fonction asynchrone retournant un résultat de type `T`. Chaque handler lui fournit le groupe d’opérations à exécuter.
 
 L’implémentation [UnitOfWork](HR.LeaveManagement.Persistence/UnitOfWork.cs) :
 
@@ -578,23 +629,28 @@ L’inscription publique est disponible uniquement en développement et crée to
 
 `[Authorize]` exige une authentification. `[Authorize(Roles = "Administrator")]` exige le rôle correspondant.
 
-Ces attributs ne suffisent pas à contrôler la propriété d’une demande. C’est le rôle de [LeaveRequestAccess](HR.LeaveManagement.Application/Services/LeaveRequestAccess.cs) :
+Ces attributs ne suffisent pas à contrôler la propriété d’une demande. C’est le rôle de `EnsureAllowed` dans [LeaveRequestRules](HR.LeaveManagement.Application/Features/LeaveRequest/Shared/LeaveRequestRules.cs) :
 
 ```csharp
 public static void EnsureAllowed(
     IUserService user,
     Domain.LeaveRequest request)
 {
-    if (string.IsNullOrEmpty(user.UserId) ||
-        (!user.IsAdministrator &&
-         request.RequestingEmployeeId != user.UserId))
+    if (string.IsNullOrEmpty(user.UserId))
+    {
         throw new ForbiddenException();
+    }
+
+    if (!user.IsAdministrator && request.RequestingEmployeeId != user.UserId)
+    {
+        throw new ForbiddenException();
+    }
 }
 ```
 
 L’accès est refusé si l’identifiant est absent, ou si l’utilisateur n’est ni administrateur ni propriétaire.
 
-Le workflow et la query de détail utilisent ce contrôle. Les listes appliquent leur filtrage dans leur handler.
+Les handlers de modification, approbation, annulation, suppression et détail utilisent ce contrôle. Les listes appliquent leur filtrage dans leur handler.
 
 Certaines protections existent aussi dans les traitements applicatifs : approbation, suppression de demande et commandes d’allocation vérifient le rôle. Ce n’est pas une politique universelle fournie par MediatR : par exemple, les handlers de commandes de types s’appuient actuellement sur la protection de leurs contrôleurs. Un nouveau point d’entrée doit tenir compte de ces différences.
 
@@ -621,7 +677,7 @@ app.MapControllers();
 
 Le premier composant établit l’identité, le second vérifie les permissions, et les contrôleurs exposent les actions.
 
-Le pipeline HTTP d’ASP.NET Core est distinct du pipeline MediatR : le premier traite les requêtes HTTP, le second les messages applicatifs envoyés avec `Send`.
+Le pipeline HTTP d’ASP.NET Core traite les requêtes HTTP. MediatR transmet les messages applicatifs envoyés avec `Send` aux handlers ; les validations de commandes sont appelées dans ces handlers.
 
 ### 8.2. Lire un contrôleur
 
@@ -648,6 +704,10 @@ Les actions de modification comparent l’identifiant de route à celui de la co
 | `POST /api/auth/register` | Inscription locale en développement. |
 | `POST /api/auth/login` | Connexion et récupération du JWT. |
 | `GET /api/auth/me` | Informations de l’utilisateur connecté. |
+| `GET /api/users` | Lister les utilisateurs, administrateur. |
+| `POST /api/users` | Créer un compte employé ou administrateur, administrateur. |
+| `PUT /api/users/{id}` | Modifier le profil et le rôle, administrateur. |
+| `DELETE /api/users/{id}` | Supprimer un compte sans données métier associées, administrateur. |
 | `GET /api/LeaveTypes` | Liste des types pour un utilisateur authentifié. |
 | `POST /api/LeaveTypes` | Créer un type, administrateur. |
 | `GET /api/LeaveAllocations/mine` | Allocations de l’utilisateur courant. |
@@ -666,7 +726,44 @@ Swagger présente aussi les routes de détail, modification et suppression des t
 
 ### 8.4. Réponses et exceptions
 
-[GlobalExceptionHandler](HR.LeaveManagement.Api/Middleware/GlobalExceptionHandler.cs) convertit les exceptions connues en réponses JSON de type `ProblemDetails` ou `ValidationProblemDetails`.
+Les exceptions applicatives et le gestionnaire HTTP ont deux responsabilités différentes :
+
+| Emplacement | Responsabilité | Exemple |
+|---|---|---|
+| `Application/Exceptions` | Décrire le problème rencontré, sans dépendre d’ASP.NET Core. | `throw new NotFoundException("LeaveRequest", id);` |
+| [GlobalExceptionHandler](HR.LeaveManagement.Api/Middleware/GlobalExceptionHandler.cs) | Intercepter l’exception et construire la réponse HTTP. | Transformer `NotFoundException` en HTTP 404 avec du JSON. |
+
+Les trois classes d’exception sont volontairement simples :
+
+- [BadRequestException](HR.LeaveManagement.Application/Exceptions/BadRequestException.cs) : une donnée est invalide ou une règle métier refuse l’action. Elle accepte un message seul, ou un message accompagné des erreurs FluentValidation.
+- [ForbiddenException](HR.LeaveManagement.Application/Exceptions/ForbiddenException.cs) : l’utilisateur n’a pas le droit d’effectuer l’opération.
+- [NotFoundException](HR.LeaveManagement.Application/Exceptions/NotFoundException.cs) : la ressource recherchée n’existe pas.
+
+Elles héritent de `Exception`. L’appel `: base(message)` transmet le texte au constructeur de la classe de base ; ce texte est ensuite disponible dans `exception.Message`.
+
+```text
+Handler : détecter un problème et lancer une exception
+    → GlobalExceptionHandler : choisir le code HTTP avec des if/else
+    → Construire un objet ProblemDetails
+    → Envoyer le JSON au client
+```
+
+Le gestionnaire utilise un seul format `ProblemDetails`. Pour une `BadRequestException`, `problem.Extensions["errors"]` ajoute les messages par champ au JSON. Il n’est donc pas nécessaire d’utiliser un autre type de réponse pour la validation.
+
+Dans `BadRequestException`, une boucle parcourt les erreurs. Le dictionnaire associe le nom de chaque champ à une liste de messages, ce qui conserve plusieurs erreurs sur un même champ. Les listes sont sérialisées en tableaux JSON :
+
+```json
+{
+  "type": "https://httpstatuses.com/400",
+  "title": "Validation failed",
+  "status": 400,
+  "errors": {
+    "RequestComments": ["Le commentaire est trop long."]
+  }
+}
+```
+
+La propriété `errors` contient les règles réellement déclenchées ; le texte ci-dessus est un exemple de réponse.
 
 | Situation | Réponse |
 |---|---|
@@ -682,11 +779,29 @@ Les créations de demandes et d’allocations retournent actuellement `204`, et 
 
 Les exceptions inconnues sont journalisées puis laissées à la gestion générale d’ASP.NET Core. Les contrôleurs ne répètent donc pas des blocs `try/catch` pour toutes les erreurs métier.
 
+Dans `Program.cs`, `AddExceptionHandler<GlobalExceptionHandler>()` enregistre le gestionnaire, `AddProblemDetails()` fournit la gestion générale des réponses d’erreur et `UseExceptionHandler()` active l’interception. `TryHandleAsync` retourne `true` quand la réponse a été envoyée, et `false` quand ASP.NET Core doit poursuivre sa gestion de l’exception.
+
 ## 9. Blazor et les services techniques
 
 ### 9.1. Interface Blazor
 
-[Home.razor](HR.LeaveManagement.BlazorUI/Components/Pages/Home.razor) rassemble les formulaires de connexion et d’inscription locale, les quotas, les demandes et les actions d’administration.
+Le projet est une **Blazor Web App avec rendu Interactive Server**. Les pages sont réparties par usage :
+
+| Route | Page | Accès |
+|---|---|---|
+| `/connexion` | [Login.razor](HR.LeaveManagement.BlazorUI/Components/Pages/Login.razor) : connexion commune aux deux rôles. | Public. |
+| `/inscription` | [Register.razor](HR.LeaveManagement.BlazorUI/Components/Pages/Register.razor) : inscription locale d’un employé. | Développement uniquement. |
+| `/` | [Home.razor](HR.LeaveManagement.BlazorUI/Components/Pages/Home.razor) : indicateurs et dernières demandes. | Utilisateur connecté. |
+| `/utilisateurs` | [Users.razor](HR.LeaveManagement.BlazorUI/Components/Pages/Administration/Users.razor) : liste, ajout, modification et suppression. | Administrateur. |
+| `/types-conge` | [LeaveTypes.razor](HR.LeaveManagement.BlazorUI/Components/Pages/Administration/LeaveTypes.razor) : catalogue et quotas par défaut. | Administrateur. |
+| `/allocations` | [Allocations.razor](HR.LeaveManagement.BlazorUI/Components/Pages/Administration/Allocations.razor) : soldes, attribution annuelle, modification et suppression. | Gestion pour l’administrateur ; lecture de ses propres soldes pour l’employé. |
+| `/demandes` | [Requests.razor](HR.LeaveManagement.BlazorUI/Components/Pages/Requests.razor) : demandes et décisions. | Données et actions filtrées selon le rôle. |
+
+[MainLayout.razor](HR.LeaveManagement.BlazorUI/Components/Layout/MainLayout.razor) porte le menu latéral et l’en-tête. `AuthLayout` affiche les pages publiques sans navigation administrative. Les formulaires utilisent `EditForm`, `DataAnnotationsValidator` et `ValidationMessage` ; les contrôles API restent nécessaires même lorsqu’un formulaire est validé dans l’interface.
+
+[ApiAuthenticationStateProvider](HR.LeaveManagement.BlazorUI/Services/ApiAuthenticationStateProvider.cs) transmet l’état de session à Blazor. `AuthorizeRouteView` protège les pages ; les attributs `[Authorize]` protègent aussi les routes API. Le menu seul ne constitue pas un contrôle d’accès.
+
+[ApiPageBase](HR.LeaveManagement.BlazorUI/Components/Shared/ApiPageBase.cs) gère l’état local de chargement, les erreurs et les succès de chaque page. Les boutons sont désactivés pendant les opérations. `ConfirmDialog` utilise une boîte de dialogue native pour confirmer les suppressions. Le thème et les adaptations mobiles sont définis dans `wwwroot/app.css`, sans dépendance à un service externe de polices ou d’images.
 
 Les composants utilisent [LeaveApiClient](HR.LeaveManagement.BlazorUI/Services/LeaveApiClient.cs), qui :
 
@@ -698,13 +813,19 @@ Les composants utilisent [LeaveApiClient](HR.LeaveManagement.BlazorUI/Services/L
 
 Le JWT appartient à l’instance `Scoped` du circuit Blazor. Il n’est pas partagé entre utilisateurs et n’est pas enregistré dans le stockage du navigateur. Un rechargement complet de la page exige une nouvelle connexion.
 
+Les comptes sont administrés par `UsersController`, via le contrat `IUserAdministrationService` et son implémentation Identity `UserAdministrationService`. Les mots de passe ne sont jamais renvoyés dans la liste. La création et l’attribution du rôle sont transactionnelles. Un administrateur ne peut pas supprimer son propre compte ni retirer son propre rôle. Un compte lié à des demandes ou allocations ne peut pas être supprimé.
+
+Le JWT contient une empreinte de sécurité Identity, vérifiée à chaque appel API. Changer le rôle invalide les anciens jetons du compte ; supprimer le compte invalide aussi ses sessions. L’utilisateur doit alors se reconnecter.
+
+Un [guide spécifique à Blazor](HR.LeaveManagement.BlazorUI/README.md) décrit les pages, les composants et leur état.
+
 Dans ce mode interactif serveur, les appels du client API partent du serveur Blazor. CORS concerne les accès directs d’un navigateur à une autre origine ; ce n’est ni un contrôle de rôle ni le mécanisme de protection de ces appels serveur.
 
 ### 9.2. Notifications et journalisation
 
 `Application` utilise `IEmailSender` et `IAppLogger<T>`. `Infrastructure` fournit respectivement `SmtpEmailSender` et `AppLogger<T>`.
 
-`LeaveRequestWorkflow.NotifyAsync` recherche l’adresse du demandeur dans Identity. Si elle manque, la notification est ignorée. Si l’envoi retourne `false` ou lève une exception, un avertissement est journalisé.
+[LeaveRequestNotification.SendAsync](HR.LeaveManagement.Application/Features/LeaveRequest/Shared/LeaveRequestNotification.cs) recherche l’adresse du demandeur dans Identity. Si elle manque, la notification est ignorée. Si l’envoi retourne `false` ou lève une exception, un avertissement est journalisé. Les handlers appellent cette méthode après validation de leur transaction.
 
 La transaction métier est déjà validée : une panne SMTP ne supprime pas la demande et ne restitue pas les jours. Le SMTP est désactivé par défaut.
 
@@ -719,7 +840,7 @@ Il n’existe actuellement ni file durable de notifications ni mécanisme de ren
 | `public sealed class` | Classe accessible dont on ne peut pas hériter. |
 | `public static void` | Méthode appelée sur la classe, sans valeur de retour. |
 | `abstract class` | Classe de base qu’on ne peut pas instancier directement. |
-| `class X(...)` | Constructeur primaire, utilisé notamment par le workflow. |
+| `class X(...)` | Constructeur primaire, utilisé notamment par les handlers. |
 | `class X : BaseEntity` | Héritage d’une classe. |
 | `class X : IInterface` | Implémentation d’un contrat. |
 | `Task` / `Task<T>` | Opération asynchrone sans / avec une valeur de résultat. |
@@ -749,13 +870,20 @@ await unitOfWork.ExecuteAsync(async () =>
 
 `async () => { ... }` est une fonction sans paramètre transmise comme argument. Son `return true` fournit le résultat générique attendu par `ExecuteAsync<T>` ; cela ne correspond pas au statut d’approbation de la demande.
 
-Exemple d’opérateur ternaire réel :
+Exemple du mouvement de solde dans le handler d’approbation :
 
 ```csharp
-allocation.NumberOfDays += approved ? -days : entity.DeductedDays;
+if (request.Approved)
+{
+    allocation.NumberOfDays -= days;
+}
+else
+{
+    allocation.NumberOfDays += entity.DeductedDays;
+}
 ```
 
-Si `approved` est vrai, le workflow soustrait les jours. Sinon, il ajoute les jours précédemment déduits. Les conditions entourant cette ligne déterminent quand ce mouvement est nécessaire.
+Si `request.Approved` est vrai, le handler soustrait les jours après vérification du solde. Sinon, il restitue les jours précédemment déduits. Le bloc n’est exécuté que lors d’une approbation ou du rejet d’une demande précédemment approuvée.
 
 Le token d’annulation ne stoppe pas automatiquement toutes les tâches : il doit être transmis aux API concernées. Plusieurs méthodes de repository de ce projet n’acceptent actuellement pas ce paramètre.
 
@@ -957,7 +1085,7 @@ Les tests d’intégration démarrent une véritable API avec Identity et une ba
 
 - Création, lecture, modification et filtrage des demandes.
 - Autorisations des employés, administrateurs et utilisateurs anonymes.
-- Validation des entrées et politique CORS.
+- Validation explicite des commandes, réponses HTTP 400 avec les erreurs par champ et politique CORS.
 - Approbations, rejets, annulations et idempotence.
 - Opérations concurrentes sur une allocation.
 - Retour arrière du solde si la sauvegarde de la demande échoue.
@@ -1037,7 +1165,7 @@ Exemple : « créer une sortie de stock ».
 | 8 | Query et DTO | Comment relire le résultat sans exposer toute l’entité ? |
 | 9 | Tests | Que doit-il se passer en cas de refus, concurrence ou annulation répétée ? |
 
-Le pipeline de validation et les enregistrements de services doivent être branchés pour que les validateurs et handlers soient effectivement appelés.
+Enregistrer les handlers et les validateurs dans les services, puis appeler explicitement `ValidateAsync` au début de chaque handler concerné. Sans cet appel, les règles du validateur ne seront pas exécutées.
 
 ### 13.4. Choisir le bon emplacement pour une règle
 
@@ -1078,9 +1206,9 @@ Ces points décrivent des choix à évaluer ; les fonctionnalités proposées ne
 | 1 | `Domain/LeaveType.cs`, `LeaveAllocation.cs`, `LeaveRequest.cs` | Identifier les données et les liens. |
 | 2 | `Api/Controllers/LeaveRequestsController.cs` | Voir les actions exposées et les rôles. |
 | 3 | `Application/Features/LeaveRequest/Commands/CreateLeaveRequest` | Relier commande, validateur et handler. |
-| 4 | `Application/Services/LeaveRequestWorkflow.cs` | Suivre les règles et les changements de solde. |
-| 5 | `Application/Services/LeaveDuration.cs` et `LeaveRequestAccess.cs` | Comprendre calcul et accès. |
-| 6 | `Application/Behaviors/ValidationBehavior.cs` | Voir comment la validation précède le handler. |
+| 4 | `Application/Features/LeaveRequest/Commands` | Suivre les règles, transactions et changements de solde dans chaque handler. |
+| 5 | `Application/Features/LeaveRequest/Shared/LeaveRequestRules.cs` et `LeaveRequestNotification.cs` | Comprendre calcul, accès et notifications. |
+| 6 | `Application/Features/LeaveRequest/Commands/CreateLeaveRequest/CreateLeaveRequestCommandValidator.cs` | Lire les règles appelées explicitement au début du handler. |
 | 7 | `Application/Features/LeaveRequest/Queries/GetLeaveRequestList` | Comprendre filtrage et DTO. |
 | 8 | `Application/Contracts/Persistence` | Lire les besoins exprimés par l’application. |
 | 9 | `Persistence/Repositories` et `UnitOfWork.cs` | Voir l’implémentation des écritures et transactions. |

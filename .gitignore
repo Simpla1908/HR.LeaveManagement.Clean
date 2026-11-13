@@ -11,3 +11,6 @@
 
 # Generated test results
 **/[Tt]est[Rr]esults/
+
+# Local browser verification tools and screenshots
+/.qa/

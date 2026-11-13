@@ -19,4 +19,10 @@ public class LeaveTypeRepository
         return !await _context.LeaveTypes
             .AnyAsync(x => x.Name == name);
     }
+
+    public async Task<bool> IsInUseAsync(int id)
+    {
+        return await _context.LeaveAllocations.AnyAsync(x => x.LeaveTypeId == id)
+            || await _context.LeaveRequests.AnyAsync(x => x.LeaveTypeId == id);
+    }
 }

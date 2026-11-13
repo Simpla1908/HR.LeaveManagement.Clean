@@ -1,0 +1,30 @@
+@page "/inscription"
+@layout AuthLayout
+@inherits ApiPageBase
+@inject IWebHostEnvironment Environment
+<PageTitle>Créer un compte · Congé</PageTitle>
+<div class="register-container">
+    <a class="back-link" href="/connexion">← Retour à la connexion</a>
+    <div class="panel register-card"><span class="section-label">PREMIER ACCÈS</span><h1>Bienvenue dans l'équipe.</h1>
+    @if (!Environment.IsDevelopment()) { <p>L'inscription libre n'est pas disponible. Contactez votre administrateur.</p> }
+    else
+    {
+        <p class="muted">Créez votre compte employé pour accéder à votre espace.</p>
+        <Feedback Error="@Error" Success="@Success" Busy="@IsBusy" />
+        <EditForm Model="model" OnValidSubmit="RegisterAsync" FormName="register">
+            <DataAnnotationsValidator /><ValidationSummary />
+            <fieldset disabled="@IsBusy"><div class="form-grid">
+                <div class="field"><label for="register-first">Prénom</label><InputText id="register-first" class="form-control" autocomplete="given-name" @bind-Value="model.FirstName" /></div>
+                <div class="field"><label for="register-last">Nom</label><InputText id="register-last" class="form-control" autocomplete="family-name" @bind-Value="model.LastName" /></div>
+                <div class="field"><label for="register-username">Identifiant</label><InputText id="register-username" class="form-control" autocomplete="username" @bind-Value="model.UserName" /></div>
+                <div class="field"><label for="register-email">Adresse e-mail</label><InputText id="register-email" type="email" class="form-control" autocomplete="email" @bind-Value="model.Email" /></div>
+            </div><div class="field"><label for="register-password">Mot de passe</label><InputText id="register-password" type="password" class="form-control" autocomplete="new-password" @bind-Value="model.Password" /><small>8 caractères minimum, avec majuscule, minuscule, chiffre et symbole.</small></div>
+            <button class="button primary" type="submit">Créer mon compte<AppIcon Name="arrow" /></button></fieldset>
+        </EditForm>
+    }</div>
+</div>
+@code {
+    private RegistrationModel model = new();
+    protected override Task OnInitializedAsync() => Task.CompletedTask;
+    private Task RegisterAsync() => RunAsync(async () => { await Api.RegisterAsync(model); model = new(); }, "Compte créé. Vous pouvez maintenant vous connecter.");
+}

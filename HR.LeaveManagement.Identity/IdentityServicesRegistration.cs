@@ -57,6 +57,7 @@ public static class IdentityServicesRegistration
 
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IUserService, UserService>();
+        services.AddScoped<IUserAdministrationService, UserAdministrationService>();
 
         // 5. Récupérer et valider la clé de signature.
         var encodedKey = configuration["JwtSettings:Key"]
@@ -85,6 +86,22 @@ public static class IdentityServicesRegistration
         .AddJwtBearer(options =>
         {
             options.MapInboundClaims = false;
+
+            // Vérifier qu'un compte supprimé ou un rôle modifié ne réutilise pas un ancien JWT.
+            options.Events = new JwtBearerEvents
+            {
+                OnTokenValidated = async context =>
+                {
+                    var manager = context.HttpContext.RequestServices.GetRequiredService<UserManager<ApplicationUser>>();
+                    var id = context.Principal?.FindFirst("uid")?.Value;
+                    var stamp = context.Principal?.FindFirst("security_stamp")?.Value;
+                    var account = id is null ? null : await manager.FindByIdAsync(id);
+                    if (account is null || stamp != account.SecurityStamp)
+                    {
+                        context.Fail("Ce compte ou ses autorisations ont changé. Reconnectez-vous.");
+                    }
+                }
+            };
 
             options.TokenValidationParameters =
                 new TokenValidationParameters
