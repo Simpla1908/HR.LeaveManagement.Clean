@@ -4,6 +4,10 @@ Application de gestion des congés en **.NET 10** : API ASP.NET Core, interface 
 
 Ce guide explique le code présent dans la solution, le rôle de ses classes et les parcours entre couches. Il propose ensuite une démarche pour réutiliser cette organisation dans d’autres projets.
 
+L’organisation actuelle privilégie des traitements visibles dans les handlers : la validation est appelée explicitement, les règles des demandes sont regroupées dans `Features/LeaveRequest`, et les mappings sont séparés par fonctionnalité. L’interface Blazor expose désormais les pages de connexion, de gestion des utilisateurs, des types et des allocations, en complément du suivi des demandes.
+
+Pour démarrer, suivre la [configuration locale](#11-démarrage-local). Pour comprendre les changements de structure, consulter les [repères sur les évolutions](#15-repères-sur-les-évolutions-du-projet). Le [guide Blazor](HR.LeaveManagement.BlazorUI/README.md) détaille l’organisation de l’interface.
+
 ## Sommaire
 
 1. [Le besoin métier](#1-le-besoin-métier)
@@ -20,6 +24,7 @@ Ce guide explique le code présent dans la solution, le rôle de ses classes et 
 12. [Les tests](#12-les-tests)
 13. [Reproduire cette architecture](#13-reproduire-cette-architecture)
 14. [Ordre de lecture et exercices](#14-ordre-de-lecture-et-exercices)
+15. [Repères sur les évolutions du projet](#15-repères-sur-les-évolutions-du-projet)
 
 ## 1. Le besoin métier
 
@@ -59,12 +64,12 @@ Créer une demande ne réserve donc pas les jours. Plusieurs demandes peuvent re
 | `Domain` | Décrire les données métier et leur identité. | [LeaveRequest](HR.LeaveManagement.Domain/LeaveRequest.cs), [LeaveAllocation](HR.LeaveManagement.Domain/LeaveAllocation.cs), [LeaveType](HR.LeaveManagement.Domain/LeaveType.cs). |
 | `Application` | Définir les cas d’utilisation, règles applicatives et contrats. | `Features`, `Contracts`, `MappingProfiles`. |
 | `Persistence` | Implémenter l’accès SQL Server, les repositories et les transactions EF Core. | [HrDatabaseContext](HR.LeaveManagement.Persistence/DatabaseContext/HrDatabaseContext.cs), [UnitOfWork](HR.LeaveManagement.Persistence/UnitOfWork.cs). |
-| `Identity` | Gérer les comptes, mots de passe, rôles et JWT. | [AuthService](HR.LeaveManagement.Identity/Services/AuthService.cs), [UserService](HR.LeaveManagement.Identity/Services/UserService.cs). |
+| `Identity` | Gérer les comptes, mots de passe, rôles, JWT et opérations d’administration des utilisateurs. | [AuthService](HR.LeaveManagement.Identity/Services/AuthService.cs), [UserService](HR.LeaveManagement.Identity/Services/UserService.cs), [UserAdministrationService](HR.LeaveManagement.Identity/Services/UserAdministrationService.cs). |
 | `Infrastructure` | Fournir les notifications et la journalisation. | [SmtpEmailSender](HR.LeaveManagement.Infrastructure/Services/SmtpEmailSender.cs), [AppLogger](HR.LeaveManagement.Infrastructure/Services/AppLogger.cs). |
 | `Api` | Exposer les opérations par HTTP et assembler les implémentations. | [Program.cs](HR.LeaveManagement.Api/Program.cs), `Controllers`, `Middleware`. |
 | `BlazorUI` | Afficher les écrans et appeler l’API. | [Home.razor](HR.LeaveManagement.BlazorUI/Components/Pages/Home.razor), [LeaveApiClient](HR.LeaveManagement.BlazorUI/Services/LeaveApiClient.cs). |
-| `Application.UnitTests` | Vérifier des règles isolées, les mappings et le client API. | [LeaveRulesTests](HR.LeaveManagement.Application.UnitTests/LeaveRulesTests.cs), [ApiClientTests](HR.LeaveManagement.Application.UnitTests/ApiClientTests.cs). |
-| `Persistence.IntegrationTests` | Vérifier l’API avec Identity, les migrations et SQL Server. | [LeaveApiTests](HR.LeaveManagement.Persistence.IntegrationTests/LeaveApiTests.cs), [ApiFixture](HR.LeaveManagement.Persistence.IntegrationTests/ApiFixture.cs). |
+| `Application.UnitTests` | Vérifier les règles, les exceptions, les mappings, le client API et l’état d’authentification Blazor. | [LeaveRulesTests](HR.LeaveManagement.Application.UnitTests/LeaveRulesTests.cs), [ApiClientTests](HR.LeaveManagement.Application.UnitTests/ApiClientTests.cs), [ExceptionTests](HR.LeaveManagement.Application.UnitTests/ExceptionTests.cs). |
+| `Persistence.IntegrationTests` | Vérifier l’API avec Identity, les migrations, SQL Server et les réponses d’erreur. | [LeaveApiTests](HR.LeaveManagement.Persistence.IntegrationTests/LeaveApiTests.cs), [UserAdministrationTests](HR.LeaveManagement.Persistence.IntegrationTests/UserAdministrationTests.cs), [GlobalExceptionHandlerTests](HR.LeaveManagement.Persistence.IntegrationTests/GlobalExceptionHandlerTests.cs), [ApiFixture](HR.LeaveManagement.Persistence.IntegrationTests/ApiFixture.cs). |
 
 Les noms du tableau sont abrégés : chaque projet porte le préfixe `HR.LeaveManagement.`.
 
@@ -105,7 +110,7 @@ Les handlers de demandes reçoivent ILeaveRequestRepository
 HR.LeaveManagement.Application/
 ├── Contracts/         Interfaces vers les services techniques
 │   ├── Persistence/   Repositories et IUnitOfWork
-│   ├── Identity/      IAuthService et IUserService
+│   ├── Identity/      IAuthService, IUserService et IUserAdministrationService
 │   ├── Email/         IEmailSender
 │   └── Logging/       IAppLogger<T>
 ├── Features/          Cas d’utilisation regroupés par fonctionnalité
@@ -339,6 +344,16 @@ Les conversions entre commandes, entités et DTO sont réparties par fonctionnal
 - [LeaveTypeProfile.cs](HR.LeaveManagement.Application/MappingProfiles/LeaveTypeProfile.cs) : mappings des types de congé.
 
 Ces profils sont découverts automatiquement par `AddAutoMapper` dans `ApplicationServiceRegistration.cs`.
+
+| Profil | Conversions configurées |
+|---|---|
+| `LeaveAllocationProfile` | Allocation vers DTO de liste et de détail ; commande de modification vers allocation. |
+| `LeaveRequestProfile` | Demande vers DTO de liste et de détail ; commandes de création et modification vers demande. |
+| `LeaveTypeProfile` | Type et DTO de liste dans les deux sens ; type vers DTO de détail ; commandes de création et modification vers type. |
+
+Par exemple, [LeaveAllocationDto.cs](HR.LeaveManagement.Application/Features/LeaveAllocation/Queries/GetLeaveAllocations/LeaveAllocationDto.cs) contient à la fois `LeaveTypeId` et `LeaveType`. Le premier identifie le type pour les actions de modification ; le second permet d’afficher son nom et ses paramètres. `EmployeeId` identifie le propriétaire, tandis que `Period` et `NumberOfDays` décrivent l’année et le solde.
+
+Les trois conversions d’allocations et les quatre conversions de demandes se trouvent dans leurs profils respectifs. Aucun enregistrement manuel de chaque profil n’est nécessaire.
 
 ```csharp
 // Créer une entité à partir d’une commande.
@@ -603,6 +618,8 @@ En présence d’allocations en double, il faut les réconcilier avant d’appli
 | [ApplicationUser](HR.LeaveManagement.Identity/Models/ApplicationUser.cs) | Étend l’utilisateur Identity avec le prénom et le nom. |
 | [AuthService](HR.LeaveManagement.Identity/Services/AuthService.cs) | Inscrit un utilisateur, vérifie les identifiants et génère le JWT. |
 | [UserService](HR.LeaveManagement.Identity/Services/UserService.cs) | Lit l’utilisateur courant et récupère les informations des employés. |
+| [IUserAdministrationService](HR.LeaveManagement.Application/Contracts/Identity/IUserAdministrationService.cs) | Définit le contrat applicatif pour lister, créer, modifier et supprimer les comptes. |
+| [UserAdministrationService](HR.LeaveManagement.Identity/Services/UserAdministrationService.cs) | Implémente ce contrat avec `UserManager`, les rôles et le contexte Identity. |
 | [IdentityServicesRegistration](HR.LeaveManagement.Identity/IdentityServicesRegistration.cs) | Configure Identity, les mots de passe, SQL Server et la validation JWT. |
 | [IdentityRoleSeeder](HR.LeaveManagement.Identity/Services/IdentityRoleSeeder.cs) | Crée les rôles manquants `Employee` et `Administrator` au démarrage. |
 
@@ -619,6 +636,8 @@ Email + mot de passe
 ```
 
 L’API vérifie la signature, l’émetteur, l’audience et l’expiration du jeton. `UserService.UserId` lit le claim `uid` ; `IsAdministrator` s’appuie sur les rôles du principal HTTP.
+
+Le jeton contient également le claim `security_stamp`, issu de `ApplicationUser.SecurityStamp`. Dans `IdentityServicesRegistration`, `OnTokenValidated` vérifie que le compte existe encore et que cette empreinte correspond à celle du jeton. Lors d’un changement de rôle par le service d’administration, `UpdateSecurityStampAsync` renouvelle l’empreinte : les anciens jetons sont refusés au prochain appel API.
 
 L’inscription publique est disponible uniquement en développement et crée toujours un compte `Employee`. Le mot de passe doit avoir au moins 8 caractères, une majuscule, une minuscule, un chiffre et un symbole.
 
@@ -653,6 +672,40 @@ L’accès est refusé si l’identifiant est absent, ou si l’utilisateur n’
 Les handlers de modification, approbation, annulation, suppression et détail utilisent ce contrôle. Les listes appliquent leur filtrage dans leur handler.
 
 Certaines protections existent aussi dans les traitements applicatifs : approbation, suppression de demande et commandes d’allocation vérifient le rôle. Ce n’est pas une politique universelle fournie par MediatR : par exemple, les handlers de commandes de types s’appuient actuellement sur la protection de leurs contrôleurs. Un nouveau point d’entrée doit tenir compte de ces différences.
+
+### 7.4. Gestion des utilisateurs
+
+Les routes de [UsersController](HR.LeaveManagement.Api/Controllers/UsersController.cs) sont réservées au rôle `Administrator`. Le contrôleur appelle directement `IUserAdministrationService`. Les contrôleurs de congés passent par MediatR ; les contrôleurs d’authentification et d’administration des comptes utilisent leurs services Identity derrière des contrats applicatifs.
+
+```text
+Page Users.razor
+    → LeaveApiClient : requête HTTP avec le JWT
+    → UsersController : autorisation et validation des données HTTP
+    → IUserAdministrationService
+    → UserAdministrationService : règles d’administration
+    → UserManager et contexte Identity : sauvegarde
+```
+
+[UserManagementModels.cs](HR.LeaveManagement.Application/Models/Identity/UserManagementModels.cs) définit les données échangées :
+
+| Modèle | Utilisation |
+|---|---|
+| `UserDetailsRequest` | Prénom, nom, identifiant, e-mail et rôle lors d’une modification. |
+| `CreateUserRequest` | Même profil, accompagné du mot de passe initial lors de la création. |
+| `UserSummary` | Profil et identifiant retournés dans la liste, sans mot de passe ni données techniques Identity. |
+
+Les annotations de ces modèles sont contrôlées par `[ApiController]`. `UserManager` applique aussi les règles Identity, notamment celles du mot de passe et de l’unicité des comptes. Cette validation des comptes est distincte des validateurs FluentValidation appelés dans les handlers de congés.
+
+Les opérations suivent ces règles :
+
+- La création du compte et l’ajout de son rôle se font dans une transaction Identity.
+- La modification du profil et, si nécessaire, de ses rôles est également transactionnelle.
+- Les rôles acceptés sont `Employee` et `Administrator` ; les libellés affichés dans l’interface sont « Employé » et « Administrateur ».
+- Un administrateur peut modifier son profil, mais ne peut ni supprimer son propre compte ni retirer son propre rôle administrateur.
+- Un compte ayant encore des demandes ou des allocations est conservé ; le service renvoie le motif du refus de suppression.
+- Pour un ancien compte portant les deux rôles, choisir `Employee` retire aussi `Administrator` et invalide les anciens jetons.
+
+La modification du profil existant concerne l’identité et le rôle. Le formulaire de création recueille le mot de passe initial et sa confirmation ; la liste des comptes ne retourne jamais ces valeurs.
 
 ## 8. L’API et les erreurs HTTP
 
@@ -769,6 +822,7 @@ La propriété `errors` contient les règles réellement déclenchées ; le text
 |---|---|
 | Lecture réussie : `Ok(result)` | `200 OK` avec les données. |
 | Création d’un type : `CreatedAtRoute(...)` | `201 Created` avec l’identifiant et la route de détail. |
+| Création d’un utilisateur : `StatusCode(201, ...)` | `201 Created` avec l’identifiant du compte. |
 | Plusieurs commandes réussies : `NoContent()` | `204 No Content`, sans corps. |
 | `BadRequestException` | `400 Bad Request`, avec les erreurs de validation lorsqu’elles existent. |
 | JWT absent ou invalide sur une route protégée | `401 Unauthorized`, pris en charge par l’authentification. |
@@ -821,7 +875,85 @@ Un [guide spécifique à Blazor](HR.LeaveManagement.BlazorUI/README.md) décrit 
 
 Dans ce mode interactif serveur, les appels du client API partent du serveur Blazor. CORS concerne les accès directs d’un navigateur à une autre origine ; ce n’est ni un contrôle de rôle ni le mécanisme de protection de ces appels serveur.
 
-### 9.2. Notifications et journalisation
+### 9.2. Interactive Server, formulaires et état des pages
+
+Le mode interactif est configuré dans [Program.cs côté Blazor](HR.LeaveManagement.BlazorUI/Program.cs) :
+
+```csharp
+builder.Services.AddRazorComponents()
+    .AddInteractiveServerComponents();
+
+// Après construction de l'application :
+app.MapRazorComponents<App>()
+    .AddInteractiveServerRenderMode();
+```
+
+[App.razor](HR.LeaveManagement.BlazorUI/Components/App.razor) applique aussi `@rendermode="InteractiveServer"` à `Routes` et à `HeadOutlet`. Les événements des composants sont alors traités sur le serveur dans le circuit Blazor. Une page peut d’abord produire son HTML initial, puis devenir interactive après établissement de la connexion.
+
+Les services de session et d’autorisation sont enregistrés ainsi :
+
+```csharp
+builder.Services.AddScoped<LeaveApiClient>();
+builder.Services.AddAuthorizationCore();
+builder.Services.AddCascadingAuthenticationState();
+builder.Services.AddScoped<AuthenticationStateProvider, ApiAuthenticationStateProvider>();
+```
+
+`AddCascadingAuthenticationState` rend l’état de connexion disponible aux composants d’autorisation. Le provider utilise les informations confirmées par l’API pour construire l’identité et ses rôles. Le contrôle définitif des opérations reste effectué côté API.
+
+Le parcours de connexion est le suivant :
+
+```text
+Login.razor : EditForm vérifie le modèle
+    → LeaveApiClient.LoginAsync : POST api/auth/login
+    → Stocker le JWT dans l'instance du circuit
+    → GET api/auth/me : récupérer l'identité et les rôles
+    → SessionChanged : signaler la nouvelle session
+    → ApiAuthenticationStateProvider : notifier Blazor
+    → Routes.razor : autoriser les pages correspondant au rôle
+    → Home.razor : charger les données du tableau de bord
+```
+
+Pour comprendre les formulaires, cet extrait reprend les éléments de la connexion :
+
+```razor
+<EditForm Model="model" OnValidSubmit="SignIn" FormName="login">
+    <DataAnnotationsValidator />
+
+    <InputText type="email" @bind-Value="model.Email" />
+    <ValidationMessage For="() => model.Email" />
+
+    <InputText type="password" @bind-Value="model.Password" />
+    <ValidationMessage For="() => model.Password" />
+
+    <button type="submit">Se connecter</button>
+</EditForm>
+```
+
+`Model` contient les valeurs saisies. `@bind-Value` synchronise un champ et sa propriété. `DataAnnotationsValidator` exécute les règles du modèle ; `ValidationMessage` affiche les erreurs du champ. `OnValidSubmit` appelle `SignIn` uniquement si la validation réussit. Dans les pages de gestion, `@key` permet de recréer le formulaire lorsqu’on sélectionne un autre élément.
+
+La validation intervient à plusieurs endroits, avec des responsabilités précises :
+
+| Emplacement | Mécanisme | Exemples |
+|---|---|---|
+| Formulaires Blazor | DataAnnotations et `IValidatableObject` | Champs obligatoires, e-mail, confirmation du mot de passe, ordre des dates. |
+| Entrée HTTP des comptes | DataAnnotations et `[ApiController]` | Profil obligatoire, longueur de l’identifiant, rôles acceptés. |
+| Handlers de commandes de congés | Appels explicites à FluentValidation | Existence du type, longueur des commentaires, cohérence des dates. |
+| Traitements métier et base | Contrôles dans les handlers/services, transactions et contraintes SQL | Droits, solde suffisant, statut de la demande, unicité d’une allocation. |
+
+Les modèles d’édition sont des copies des lignes affichées. Fermer un formulaire abandonne la saisie locale ; enregistrer envoie les données à l’API, puis recharge la liste. Les recherches et filtres sont conservés dans l’état de la page.
+
+`ApiPageBase.RunAsync` évite de lancer deux opérations simultanées depuis une même page et gère ces propriétés :
+
+| Propriété | Rôle dans l’interface |
+|---|---|
+| `IsBusy` | Désactiver les commandes et afficher un indicateur pendant l’appel. |
+| `Error` | Afficher une erreur réseau ou le message renvoyé par l’API. |
+| `Success` | Confirmer l’enregistrement ou la suppression après réussite. |
+
+`ConfirmDialog` ouvre un dialogue natif avec `showModal()` via `wwwroot/app.js`. Le navigateur gère le focus dans le dialogue. L’ouverture et la fermeture du menu mobile, ainsi que la sélection du modèle à modifier, restent gérées dans les composants Razor.
+
+### 9.3. Notifications et journalisation
 
 `Application` utilise `IEmailSender` et `IAppLogger<T>`. `Infrastructure` fournit respectivement `SmtpEmailSender` et `AppLogger<T>`.
 
@@ -975,7 +1107,8 @@ dotnet run --project HR.LeaveManagement.BlazorUI --launch-profile https
 
 | Application | Adresse du profil HTTPS |
 |---|---|
-| Interface | `https://localhost:7040/` |
+| Connexion Blazor | `https://localhost:7040/connexion` |
+| Tableau de bord après connexion | `https://localhost:7040/` |
 | API | `https://localhost:7097/` |
 | Swagger, en développement | `https://localhost:7097/swagger` |
 
@@ -992,7 +1125,7 @@ Dans les variables d’environnement .NET, `__` remplace le séparateur `:` des 
 
 ### 11.6. Créer un compte administrateur de laboratoire
 
-Aucun compte administrateur ni mot de passe par défaut n’est créé. Le seeder initialise les rôles, pas un utilisateur privilégié.
+Aucun compte administrateur ni mot de passe par défaut n’est créé. Le seeder initialise les rôles, pas un utilisateur privilégié. En développement, commencer par `/inscription` pour créer le compte concerné.
 
 Après inscription locale du compte, un opérateur autorisé peut lui ajouter le rôle dans la base Identity :
 
@@ -1012,7 +1145,7 @@ WHERE u.NormalizedEmail = UPPER(@Email)
   );
 ```
 
-Se reconnecter pour recevoir un JWT contenant le nouveau rôle.
+Se reconnecter pour recevoir un JWT contenant le nouveau rôle. Après ce premier accès, la page `/utilisateurs` permet de créer les autres comptes et d’administrer leurs rôles.
 
 Pour découvrir le fonctionnement depuis l’interface :
 
@@ -1051,10 +1184,12 @@ Les destinataires proviennent d’Identity. Conserver les identifiants SMTP hors
 | Erreur de clé Base64 ou de taille | Fournir une chaîne Base64 représentant au moins 32 octets. |
 | Tables métier ou Identity absentes | Vérifier la connexion et appliquer les migrations des deux contextes. |
 | Interface incapable de joindre l’API | Vérifier le démarrage API, le port, `Api:BaseUrl` et le certificat HTTPS. |
-| `401` sur une route protégée | Se connecter et envoyer le Bearer JWT ; vérifier son expiration. |
+| `401` sur une route protégée | Se reconnecter : vérifier l’expiration du jeton, une suppression du compte ou un changement de rôle et de son empreinte de sécurité. |
 | `403` sur une demande | Vérifier le propriétaire et le rôle ; se reconnecter après un changement de rôle. |
 | Absence d’allocation ou solde insuffisant | Vérifier l’employé, le type et l’année de début du congé. |
 | Erreur lors de l’ajout de l’index unique | Rechercher et réconcilier les allocations en double. |
+| Compte ou type impossible à supprimer | Vérifier les références métier affichées par le message ; un type utilisé ou un compte ayant des demandes/allocations est conservé. |
+| Menu absent après rechargement complet | La session appartient au circuit Blazor : se reconnecter après le rechargement. |
 
 ## 12. Les tests
 
@@ -1080,8 +1215,10 @@ Les tests unitaires couvrent :
 - L’accès réservé au propriétaire ou à un administrateur identifié.
 - La validité des profils AutoMapper.
 - L’isolation des jetons entre clients Blazor et leur suppression à la déconnexion ou après expiration.
+- La transmission des changements de connexion et déconnexion à l’état d’authentification Blazor.
+- La conservation des messages métier et le regroupement de plusieurs erreurs sur un même champ.
 
-Les tests d’intégration démarrent une véritable API avec Identity et une base SQL Server. Ils vérifient notamment :
+Les tests d’API du projet d’intégration démarrent une véritable API avec Identity et une base SQL Server. Ils vérifient notamment :
 
 - Création, lecture, modification et filtrage des demandes.
 - Autorisations des employés, administrateurs et utilisateurs anonymes.
@@ -1090,6 +1227,14 @@ Les tests d’intégration démarrent une véritable API avec Identity et une ba
 - Opérations concurrentes sur une allocation.
 - Retour arrière du solde si la sauvegarde de la demande échoue.
 - Unicité des allocations et comportement des migrations sur les anciennes demandes.
+- Création, liste, modification, changement de rôle et suppression des comptes utilisateurs.
+- Refus de l’administration des comptes aux employés et aux utilisateurs anonymes.
+- Protection de l’administrateur contre la suppression de son propre compte et le retrait de son propre rôle.
+- Invalidation des anciens JWT après changement de rôle, y compris pour un ancien compte portant les deux rôles, et après suppression du compte.
+- Refus des rôles invalides, des e-mails déjà utilisés et de la suppression de comptes ou types référencés.
+- Création, modification et suppression d’un type de congé inutilisé.
+
+[GlobalExceptionHandlerTests.cs](HR.LeaveManagement.Persistence.IntegrationTests/GlobalExceptionHandlerTests.cs) vérifie aussi directement les réponses 400, 403 et 404, ainsi que la délégation des erreurs inattendues à ASP.NET Core, sans démarrer de serveur pour ces cas.
 
 Un test de solde concurrent a besoin des vraies transactions SQL ; une collection d’objets en mémoire ne reproduirait pas cette garantie.
 
@@ -1098,6 +1243,14 @@ Un test de solde concurrent a besoin des vraies transactions SQL ; une collectio
 LocalDB est utilisé par défaut. Pour un autre serveur, définir `HR_TEST_CONNECTION` avec une connexion autorisée à créer et supprimer une base de test.
 
 La fixture remplace le catalogue fourni par un nom unique `HRLeaveTests_<guid>` et supprime cette base temporaire à la fin. Elle n’utilise pas le catalogue applicatif comme base de test.
+
+### 12.4. Dernières vérifications fonctionnelles
+
+La dernière vérification fonctionnelle des évolutions décrites dans ce guide a produit **56 tests réussis** : 16 dans `Application.UnitTests` et 40 dans `Persistence.IntegrationTests`.
+
+Des parcours ont également été contrôlés dans Edge avec une base temporaire : validation de la connexion, connexion avec les deux rôles, ajout/modification/suppression des utilisateurs, gestion des types, attribution/modification/suppression des allocations, refus d’une page administrative pour un employé et affichage mobile sans débordement horizontal de la page. Les tableaux restent défilables horizontalement si leur contenu dépasse l’écran.
+
+Ces contrôles navigateur complètent les tests .NET. Les outils et captures de vérification locaux, lorsqu’ils sont présents, restent dans `.qa/`, ignoré par Git ; ils ne sont pas nécessaires au lancement de l’application.
 
 ## 13. Reproduire cette architecture
 
@@ -1215,7 +1368,10 @@ Ces points décrivent des choix à évaluer ; les fonctionnalités proposées ne
 | 10 | `Identity/Services` | Relier utilisateur HTTP, claims et comptes. |
 | 11 | `Api/Program.cs` et les fichiers d’enregistrement | Comprendre l’assemblage global. |
 | 12 | `BlazorUI/Services/LeaveApiClient.cs` et `Components/Pages/Home.razor` | Relier interface et API. |
-| 13 | Les deux projets de tests | Lire les scénarios attendus et les garanties vérifiées. |
+| 13 | `BlazorUI/Services/ApiAuthenticationStateProvider.cs` et `Components/Routes.razor` | Comprendre l’état de connexion et la protection des pages. |
+| 14 | `Api/Controllers/UsersController.cs`, `Application/Contracts/Identity/IUserAdministrationService.cs` et `Identity/Services/UserAdministrationService.cs` | Suivre l’administration des comptes jusqu’à Identity. |
+| 15 | `Application/MappingProfiles` et `Api/Middleware/GlobalExceptionHandler.cs` | Relier les modèles de sortie aux réponses et aux erreurs HTTP. |
+| 16 | Les deux projets de tests | Lire les scénarios attendus et les garanties vérifiées. |
 
 Les chemins de ce tableau sont abrégés à partir des projets `HR.LeaveManagement.*`.
 
@@ -1228,6 +1384,46 @@ Les chemins de ce tableau sont abrégés à partir des projets `HR.LeaveManageme
 5. Distinguer une erreur de validation de date, un refus d’accès et une insuffisance de solde.
 6. Concevoir sur papier une query de liste paginée : données d’entrée, DTO de sortie, recherche nécessaire et règles d’accès.
 7. Refaire une petite fonctionnalité dans un autre domaine en conservant les responsabilités de chaque couche.
+8. Suivre l’ajout d’un utilisateur depuis `Users.razor` jusqu’à la création du compte et de son rôle dans Identity.
+9. Expliquer pourquoi un utilisateur ayant perdu son rôle administrateur doit obtenir un nouveau jeton.
+10. Retrouver les trois niveaux de validation d’un formulaire utilisateur : interface, modèle HTTP et règles Identity.
 
 Les fichiers générés dans `bin` et `obj` ne sont pas des sources à reproduire. `Program - Copy.cs` est conservé comme archive et exclu de la compilation ; le point de démarrage API est `Program.cs`.
+
+## 15. Repères sur les évolutions du projet
+
+### 15.1. Où retrouver le code réorganisé
+
+Cette table permet de suivre les anciennes explications ou d’anciens onglets de l’IDE après les simplifications :
+
+| Ancien fichier supprimé | Emplacement actuel de son rôle |
+|---|---|
+| `Application/Behaviors/ValidationBehavior.cs` | Appels explicites à `ValidateAsync` au début des sept handlers de commandes qui possèdent un validateur. L’enregistrement du behavior dans MediatR a été retiré. |
+| `Application/MappingProfiles/LeaveManagementProfile.cs` | [LeaveAllocationProfile](HR.LeaveManagement.Application/MappingProfiles/LeaveAllocationProfile.cs) et [LeaveRequestProfile](HR.LeaveManagement.Application/MappingProfiles/LeaveRequestProfile.cs). `LeaveTypeProfile` reste consacré aux types. |
+| `Application/Services/LeaveRequestWorkflow.cs` | Traitements directement dans les handlers de `Features/LeaveRequest/Commands`. L’ancienne inscription du workflow dans les services a été retirée. |
+| `Application/Services/LeaveDuration.cs` | `LeaveRequestRules.GetDays`, dans [Features/LeaveRequest/Shared](HR.LeaveManagement.Application/Features/LeaveRequest/Shared/LeaveRequestRules.cs). |
+| `Application/Services/LeaveRequestAccess.cs` | `LeaveRequestRules.EnsureAllowed`, au même endroit. |
+
+Le code de notification auparavant rattaché au workflow est maintenant dans [LeaveRequestNotification.cs](HR.LeaveManagement.Application/Features/LeaveRequest/Shared/LeaveRequestNotification.cs), enregistré avec `AddScoped` et appelé après la transaction des handlers concernés.
+
+### 15.2. Fonctions ajoutées ou clarifiées
+
+| Ensemble | Organisation actuelle |
+|---|---|
+| Demandes de congé | Commandes, queries, règles communes, transactions et notifications regroupées dans `Application/Features/LeaveRequest`. |
+| Validation | FluentValidation appelé explicitement dans les handlers ; validation des formulaires et des modèles HTTP à leurs points d’entrée respectifs. |
+| Mappings | Un profil pour les types, un pour les allocations et un pour les demandes, découverts automatiquement. |
+| Exceptions | Trois exceptions applicatives ; un gestionnaire HTTP avec des `if/else`, un format `ProblemDetails` et des erreurs par champ dans `errors`. |
+| Utilisateurs | Routes administratives, contrat applicatif, service Identity, formulaires de création/modification et protections des comptes. |
+| Jetons | Empreinte Identity dans le JWT, contrôlée à chaque appel ; renouvellement lors d’un changement de rôle. |
+| Blazor | Pages dédiées, layouts public et connecté, routage protégé, état d’authentification, formulaires validés, recherche, filtres et confirmations. |
+| Interface | Thème local vert et ivoire, menu mobile, messages d’état et tableaux défilables sur petits écrans. |
+| Suppressions | Vérification des références d’un type de congé et des données métier d’un compte, en complément des règles des demandes et allocations. |
+| Vérifications | Tests des règles, mappings, exceptions, autorisations, comptes et transactions ; parcours navigateur sur ordinateur et mobile. |
+
+### 15.3. Fichiers locaux et Git
+
+Le [.gitignore](.gitignore) exclut les caches Visual Studio (`.vs/`), les paramètres personnels (`*.user`, `*.suo`, etc.), les sorties de compilation (`bin/`, `obj/`), les résultats générés (`TestResults/`) et le dossier local de vérification (`.qa/`).
+
+Cela évite notamment que `git add .` tente de lire les index Visual Studio verrouillés. Les sources, fichiers Razor, configurations EF Core, migrations et guides restent destinés au suivi de version. Les clés JWT et identifiants SMTP doivent être fournis par la configuration locale ou celle de l’hébergement, comme expliqué dans la section de démarrage.
 
