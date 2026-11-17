@@ -65,7 +65,7 @@ Créer une demande ne réserve donc pas les jours. Plusieurs demandes peuvent re
 | `Application` | Définir les cas d’utilisation, règles applicatives et contrats. | `Features`, `Contracts`, `MappingProfiles`. |
 | `Persistence` | Implémenter l’accès SQL Server, les repositories et les transactions EF Core. | [HrDatabaseContext](HR.LeaveManagement.Persistence/DatabaseContext/HrDatabaseContext.cs), [UnitOfWork](HR.LeaveManagement.Persistence/UnitOfWork.cs). |
 | `Identity` | Gérer les comptes, mots de passe, rôles, JWT et opérations d’administration des utilisateurs. | [AuthService](HR.LeaveManagement.Identity/Services/AuthService.cs), [UserService](HR.LeaveManagement.Identity/Services/UserService.cs), [UserAdministrationService](HR.LeaveManagement.Identity/Services/UserAdministrationService.cs). |
-| `Infrastructure` | Fournir les notifications et la journalisation. | [SmtpEmailSender](HR.LeaveManagement.Infrastructure/Services/SmtpEmailSender.cs), [AppLogger](HR.LeaveManagement.Infrastructure/Services/AppLogger.cs). |
+| `Infrastructure` | Fournir les e-mails (console, SMTP, SendGrid) et la journalisation Serilog. | [Guide du module 9](HR.LeaveManagement.Infrastructure/README.md), [InfrastructureServiceRegistration](HR.LeaveManagement.Infrastructure/InfrastructureServiceRegistration.cs), [AppLogger](HR.LeaveManagement.Infrastructure/Services/AppLogger.cs). |
 | `Api` | Exposer les opérations par HTTP et assembler les implémentations. | [Program.cs](HR.LeaveManagement.Api/Program.cs), `Controllers`, `Middleware`. |
 | `BlazorUI` | Afficher les écrans et appeler l’API. | [Home.razor](HR.LeaveManagement.BlazorUI/Components/Pages/Home.razor), [LeaveApiClient](HR.LeaveManagement.BlazorUI/Services/LeaveApiClient.cs). |
 | `Application.UnitTests` | Vérifier les règles, les exceptions, les mappings, le client API et l’état d’authentification Blazor. | [LeaveRulesTests](HR.LeaveManagement.Application.UnitTests/LeaveRulesTests.cs), [ApiClientTests](HR.LeaveManagement.Application.UnitTests/ApiClientTests.cs), [ExceptionTests](HR.LeaveManagement.Application.UnitTests/ExceptionTests.cs). |
@@ -732,6 +732,8 @@ Le premier composant établit l’identité, le second vérifie les permissions,
 
 Le pipeline HTTP d’ASP.NET Core traite les requêtes HTTP. MediatR transmet les messages applicatifs envoyés avec `Send` aux handlers ; les validations de commandes sont appelées dans ces handlers.
 
+L’endpoint `GET /health`, exposé par [HealthController](HR.LeaveManagement.Api/Controllers/HealthController.cs), est accessible sans authentification et renvoie `200 OK` avec le texte `Healthy` lorsque l’API est démarrée. Il utilise les Health Checks ASP.NET Core pour vérifier la disponibilité du processus, sans tester SQL Server ni les autres services externes. L’initialisation des rôles Identity au démarrage nécessite toujours une base de données accessible. Dans Swagger, ouvrir **Health → GET /health → Try it out → Execute** pour le tester. Une requête de test est aussi disponible dans [HR.LeaveManagement.Api.http](HR.LeaveManagement.Api/HR.LeaveManagement.Api.http).
+
 ### 8.2. Lire un contrôleur
 
 ```csharp
@@ -894,12 +896,16 @@ Les services de session et d’autorisation sont enregistrés ainsi :
 
 ```csharp
 builder.Services.AddScoped<LeaveApiClient>();
-builder.Services.AddAuthorizationCore();
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options => options.LoginPath = "/connexion");
+builder.Services.AddAuthorization();
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddScoped<AuthenticationStateProvider, ApiAuthenticationStateProvider>();
 ```
 
 `AddCascadingAuthenticationState` rend l’état de connexion disponible aux composants d’autorisation. Le provider utilise les informations confirmées par l’API pour construire l’identité et ses rôles. Le contrôle définitif des opérations reste effectué côté API.
+
+`AddAuthentication` fournit également le service HTTP `IAuthenticationService` pour les accès directs aux pages `[Authorize]`. `UseAuthentication()` puis `UseAuthorization()` sont placés avant `UseAntiforgery()`. Le schéma cookie redirige ces accès anonymes vers `/connexion` ; le formulaire conserve la session JWT dans le circuit, sans créer de cookie de connexion persistant.
 
 Le parcours de connexion est le suivant :
 
@@ -955,13 +961,23 @@ Les modèles d’édition sont des copies des lignes affichées. Fermer un formu
 
 ### 9.3. Notifications et journalisation
 
-`Application` utilise `IEmailSender` et `IAppLogger<T>`. `Infrastructure` fournit respectivement `SmtpEmailSender` et `AppLogger<T>`.
+`Application` utilise `IEmailSender` et `IAppLogger<T>`. `Infrastructure` sélectionne `ConsoleEmailSender`, `SmtpEmailSender`, `SendGridEmailSender` ou `DisabledEmailSender` selon `EmailSettings`. `AppLogger<T>` transmet les événements à `ILogger<T>`, configuré avec Serilog dans l’API.
 
-[LeaveRequestNotification.SendAsync](HR.LeaveManagement.Application/Features/LeaveRequest/Shared/LeaveRequestNotification.cs) recherche l’adresse du demandeur dans Identity. Si elle manque, la notification est ignorée. Si l’envoi retourne `false` ou lève une exception, un avertissement est journalisé. Les handlers appellent cette méthode après validation de leur transaction.
+[LeaveRequestNotification.SendAsync](HR.LeaveManagement.Application/Features/LeaveRequest/Shared/LeaveRequestNotification.cs) recherche l’adresse du demandeur dans Identity. Si elle manque ou si l’envoi retourne `false`, un avertissement est journalisé. Une exception est enregistrée au niveau `Error`, avec sa pile d’appels. Les handlers appellent cette méthode après validation de leur transaction.
 
-La transaction métier est déjà validée : une panne SMTP ne supprime pas la demande et ne restitue pas les jours. Le SMTP est désactivé par défaut.
+La transaction métier est déjà validée : une panne d’e-mail ne supprime pas la demande et ne restitue pas les jours. En développement, les e-mails sont affichés dans le terminal de l’API, comme avec le backend console de Django. Hors développement, ils restent désactivés tant qu’ils ne sont pas configurés. Le profil API `mailpit` permet de tester SMTP avec une boîte locale sur `http://localhost:8025`.
+
+Serilog écrit dans la console et dans `HR.LeaveManagement.Api/Logs/hr-leave-AAAAMMJJ.json` (une entrée JSON par ligne, rotation quotidienne et par taille, conservation de 14 fichiers). Les requêtes HTTP comportent leur méthode, chemin, statut, durée et identifiant. La [procédure complète du module 9](HR.LeaveManagement.Infrastructure/README.md) explique la configuration, Mailpit, SendGrid, l’injection et les tests.
 
 Il n’existe actuellement ni file durable de notifications ni mécanisme de renvoi automatique. Pour un futur projet exigeant une livraison fiable, une outbox serait une évolution possible : enregistrer l’intention de notification dans la transaction, puis la traiter séparément.
+
+### 9.4. Worker de statistiques
+
+`ApplicationStatsWorker` démarre avec l’API. Toutes les trois minutes par défaut, il compte les allocations, les demandes et les types de congé, ajoute un instantané daté en UTC dans la table `stats`, puis affiche les résultats dans la console via Serilog. Il mesure aussi le nombre, la durée moyenne en jours calendaires inclusifs et le pourcentage du total pour les demandes en attente, approuvées et annulées. Le premier relevé a lieu après le premier intervalle.
+
+La section `StatsWorker` de `HR.LeaveManagement.Api/appsettings.json` définit `Enabled` et `Interval` (`00:03:00` par défaut). La variable `StatsWorker__Interval=00:00:10` permet un essai toutes les dix secondes. Redémarrer l’API après modification. Les migrations `AddApplicationStats` et `AddLeaveRequestStatusStatistics` doivent être appliquées au contexte `HrDatabaseContext`.
+
+Chaque passage utilise un nouveau scope et une transaction pour conserver les mesures ensemble. Une panne est journalisée et le worker réessaie au prochain intervalle. Une demande annulée est exclue des autres catégories ; les rejets restent dans le total des demandes. Les nouvelles colonnes restent `NULL` sur les anciens relevés. Voir la [procédure complète du worker](HR.LeaveManagement.Infrastructure/README.md#10-worker-de-statistiques--console-et-table-stats).
 
 ## 10. Lire la syntaxe C#
 
@@ -1110,6 +1126,7 @@ dotnet run --project HR.LeaveManagement.BlazorUI --launch-profile https
 | Connexion Blazor | `https://localhost:7040/connexion` |
 | Tableau de bord après connexion | `https://localhost:7040/` |
 | API | `https://localhost:7097/` |
+| Santé de l’API | `https://localhost:7097/health` |
 | Swagger, en développement | `https://localhost:7097/swagger` |
 
 `Api:BaseUrl` configure l’adresse API côté Blazor. `Cors:AllowedOrigins` configure les origines autorisées côté API.
@@ -1125,9 +1142,17 @@ Dans les variables d’environnement .NET, `__` remplace le séparateur `:` des 
 
 ### 11.6. Créer un compte administrateur de laboratoire
 
-Aucun compte administrateur ni mot de passe par défaut n’est créé. Le seeder initialise les rôles, pas un utilisateur privilégié. En développement, commencer par `/inscription` pour créer le compte concerné.
+La migration Identity `20261114120000_SeedSimpliceAdministrator` crée le compte **Simplice Landu**, nom d’utilisateur **Simpla**, email **simplicelandu1908@gmail.com**, et lui attribue le rôle `Administrator`. Le mot de passe demandé est enregistré sous forme de hash Identity. Pour appliquer cette migration :
 
-Après inscription locale du compte, un opérateur autorisé peut lui ajouter le rôle dans la base Identity :
+```powershell
+dotnet ef database update --context HrLeaveManagementIdentityDbContext --project HR.LeaveManagement.Identity --startup-project HR.LeaveManagement.Api
+```
+
+Si le compte existe avec ce même email et ce même nom d’utilisateur, la migration conserve ses informations et son mot de passe et ajoute uniquement le rôle manquant. Si l’email ou le nom appartient à un autre compte, elle échoue sans fusionner les comptes. Le rôle est créé s’il n’existe pas encore. Cette migration de données refuse un retour arrière automatique afin de préserver les comptes et les droits préexistants ; les modifications doivent être gérées explicitement avant tout retour à la migration initiale.
+
+Se connecter ensuite via `POST /api/auth/login`, puis renseigner `Bearer <token>` dans **Authorize** de Swagger pour tester `GET /api/auth/admin`. L’inscription publique `/inscription` continue de créer des employés.
+
+Pour promouvoir manuellement un autre compte déjà inscrit, un opérateur autorisé peut lui ajouter le rôle dans la base Identity :
 
 ```sql
 DECLARE @Email nvarchar(256) = N'administrateur@example.com'; -- compte existant à adapter
@@ -1161,20 +1186,22 @@ L’attribution peut être relancée pour ajouter les employés qui ne possèden
 
 ### 11.7. Activer les notifications
 
-Le SMTP est désactivé par défaut : `EmailSettings:Enabled=false`.
+En développement, `EmailSettings:Enabled=true` et `Provider=Console` affichent les messages dans le terminal de l’API sans envoi réel. Hors développement, les notifications restent désactivées par défaut. Le [guide du module 9](HR.LeaveManagement.Infrastructure/README.md) donne la procédure complète pour la console, Mailpit sur localhost et SendGrid.
 
-Pour l’activer, configurer par secrets utilisateur ou variables d’environnement :
+Pour changer de mode, configurer par secrets utilisateur ou variables d’environnement :
 
 | Clé | Utilité |
 |---|---|
 | `EmailSettings:Enabled` | Mettre à `true` pour activer l’envoi. |
+| `EmailSettings:Provider` | `Console`, `Smtp` ou `SendGrid`. |
+| `EmailSettings:SendGridApiKey` | Clé secrète requise pour SendGrid. |
 | `EmailSettings:Host` | Serveur SMTP. |
 | `EmailSettings:Port` | Port, `587` par défaut. |
 | `EmailSettings:EnableSsl` | Chiffrement, `true` par défaut. |
 | `EmailSettings:FromAddress`, `FromName` | Expéditeur. |
 | `EmailSettings:UserName`, `Password` | Identifiants si le serveur exige une authentification. |
 
-Les destinataires proviennent d’Identity. Conserver les identifiants SMTP hors des sources.
+Les destinataires proviennent d’Identity. Conserver la clé SendGrid et les identifiants SMTP hors des sources. Le profil API `mailpit` configure automatiquement SMTP sur `127.0.0.1:1025` sans TLS.
 
 ### 11.8. Repérer un problème de configuration
 

@@ -14,3 +14,6 @@
 
 # Local browser verification tools and screenshots
 /.qa/
+
+# Generated application logs
+**/Logs/

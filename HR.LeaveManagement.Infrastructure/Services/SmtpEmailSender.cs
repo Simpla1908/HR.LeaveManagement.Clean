@@ -30,7 +30,9 @@ public sealed class SmtpEmailSender(IOptions<EmailSettings> options, ILogger<Smt
         };
         if (!string.IsNullOrWhiteSpace(settings.UserName))
             client.Credentials = new NetworkCredential(settings.UserName, settings.Password);
-        await client.SendMailAsync(message);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await client.SendMailAsync(message, timeout.Token);
+        logger.LogInformation("SMTP server accepted the email for delivery.");
         return true;
     }
 }

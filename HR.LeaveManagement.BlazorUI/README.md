@@ -80,6 +80,10 @@ Un modèle de formulaire est une copie des données de la ligne : annuler une mo
 
 Les pages administratives portent `[Authorize(Roles = "Administrator")]`. `AuthorizeRouteView` redirige l’utilisateur non connecté vers la connexion et affiche un refus pour un rôle insuffisant. Les routes API appliquent aussi leurs propres autorisations.
 
+Un accès HTTP direct à une page protégée (URL saisie ou rechargement) passe d’abord par le middleware ASP.NET Core. `Program.cs` enregistre donc `AddAuthentication(...).AddCookie(...)`, avec `LoginPath=/connexion`, et `AddAuthorization()`, puis appelle `UseAuthentication()` et `UseAuthorization()` avant `UseAntiforgery()`. Cela fournit `IAuthenticationService` et la redirection HTTP vers la connexion. `AddAuthorizationCore()` seul ne fournit pas ces services d’authentification.
+
+La connexion actuelle continue à conserver le JWT dans le circuit via `ApiAuthenticationStateProvider` ; elle n’émet pas de cookie d’authentification et ne rend pas la session persistante après un rechargement complet.
+
 Une déconnexion, un jeton expiré, une suppression de compte ou un changement de rôle provoquant un refus HTTP 401 efface la session du client. Le jeton reste en mémoire : un rechargement complet de la page demande une nouvelle connexion.
 
 ## Vérifications

@@ -23,6 +23,7 @@ public static class PersistenceServiceRegistration
         });
 
         services.AddScoped<IUnitOfWork, UnitOfWork>();
+        services.AddScoped<IApplicationStatsRepository, ApplicationStatsRepository>();
 
         // Enregistrer le repository générique.
         services.AddScoped(

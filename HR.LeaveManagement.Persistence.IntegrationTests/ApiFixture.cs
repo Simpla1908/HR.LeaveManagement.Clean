@@ -54,7 +54,8 @@ public sealed class ApiFixture : IAsyncLifetime
             ["JwtSettings:Issuer"] = "LeaveTests",
             ["JwtSettings:Audience"] = "LeaveTests",
             ["JwtSettings:DurationInMinutes"] = "30",
-            ["EmailSettings:Enabled"] = "false"
+            ["EmailSettings:Enabled"] = "false",
+            ["StatsWorker:Enabled"] = "false"
         });
         builder.Services.AddControllers().AddApplicationPart(typeof(AuthController).Assembly);
         builder.Services.AddApplicationServices();

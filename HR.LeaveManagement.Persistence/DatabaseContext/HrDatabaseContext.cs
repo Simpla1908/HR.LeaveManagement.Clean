@@ -29,6 +29,9 @@ public class HrDatabaseContext : DbContext
     // Table des demandes de congés.
     public DbSet<LeaveRequest> LeaveRequests { get; set; } = null!;
 
+    // Historique des statistiques calculées par le worker.
+    public DbSet<ApplicationStat> Stats { get; set; } = null!;
+
     // Configuration des entités et relations.
     protected override void OnModelCreating(
         ModelBuilder modelBuilder)

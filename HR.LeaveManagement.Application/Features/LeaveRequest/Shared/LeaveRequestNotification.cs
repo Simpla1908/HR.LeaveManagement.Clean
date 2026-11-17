@@ -18,6 +18,7 @@ public sealed class LeaveRequestNotification(
             var employee = await user.GetEmployee(employeeId);
             if (string.IsNullOrWhiteSpace(employee?.Email))
             {
+                logger.LogWarning("Leave notification skipped: employee {EmployeeId} has no email address.", employeeId);
                 return;
             }
 
@@ -31,12 +32,16 @@ public sealed class LeaveRequestNotification(
             var sent = await emailSender.SendEmail(email);
             if (!sent)
             {
-                logger.LogWarning("Leave notification was not sent.");
+                logger.LogWarning("Leave notification was not sent for employee {EmployeeId}.", employeeId);
+            }
+            else
+            {
+                logger.LogInformation("Leave notification processed for employee {EmployeeId}.", employeeId);
             }
         }
         catch (Exception exception)
         {
-            logger.LogWarning("Leave notification failed: {Message}", exception.Message);
+            logger.LogError(exception, "Leave notification failed for employee {EmployeeId}; the business transaction remains committed.", employeeId);
         }
     }
 }
